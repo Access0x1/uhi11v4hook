@@ -1,0 +1,17 @@
+# The same gate as `make gate`, on every push and pull request. Uniswap's v4-template runs its CI
+# on workflow_dispatch only, so a red test never shows on a PR; here it blocks the merge.
+name: gate
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.3   # the forge this template was proven with; bump it on purpose
+      - run: make gate

@@ -1,0 +1,37 @@
+# uhi11v4hook — every line below is a decision; README.md says which silent failure each one stops.
+[profile.default]
+src    = "src"
+out    = "out"
+libs   = ["lib"]
+test   = "test"
+script = "script"
+
+# One compiler for tests, scripts and verification. Nothing here compiles v4-core's concrete
+# PoolManager (exact pragma 0.8.26): tests deploy its official bytecode from hookmate instead.
+solc_version = "0.8.30"
+evm_version  = "cancun"       # v4 needs transient storage (EIP-1153)
+via_ir       = false
+optimizer    = false          # stated, not defaulted; changing it changes every mined address
+
+# These two make a mined CREATE2 salt reproduce on any machine.
+bytecode_hash = "none"
+cbor_metadata = false
+
+# Tests cannot run shell commands. uniswap-hooks, v4-core and v4-periphery each set ffi = true
+# in their OWN foundry.toml; that applies only when running their tests from inside lib/,
+# which we do not.
+ffi = false
+
+# Tests may READ the hook manifests in context/ and nothing else, and may write nowhere.
+# test/ContextManifest.t.sol checks each manifest against the hook it describes.
+fs_permissions = [{ access = "read", path = "./context" }]
+
+[fmt]
+line_length     = 120
+tab_width       = 4
+bracket_spacing = false
+int_types       = "long"
+
+# Fuzzing a v4 swap is nearly free on this stack, so the count is high. Lowering it needs a reason.
+[fuzz]
+runs = 10000

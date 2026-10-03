@@ -1,0 +1,189 @@
+{
+  "schemaVersion": "0",
+  "name": "Counter",
+  "description": "The template's example hook. Counts three events per pool: beforeSwap, afterSwap and beforeAddLiquidity. Each callback adds one to its own counter and returns a zero delta and no fee override. It holds no funds, changes no price or fee, and has no owner and no upgrade path.",
+  "status": "tested",
+  "source": {
+    "path": "src/Counter.sol",
+    "contract": "Counter",
+    "gitBlob": "df6df78ab3195bc08b0ec752531fdfb307f615d4",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x8C0",
+    "callbacks": [
+      "beforeAddLiquidity",
+      "beforeSwap",
+      "afterSwap"
+    ],
+    "returnsDelta": false
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": false,
+      "afterInitialize": false,
+      "beforeAddLiquidity": true,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": true,
+      "afterSwap": true,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": false,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": false,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": true,
+      "swapAccess": "none"
+    }
+  },
+  "routing": {
+    "autoRoutable": true,
+    "needsHookData": false,
+    "reasons": [
+      "No dynamic fee: beforeSwap returns a fee override of 0, and the hook never calls updateDynamicLPFee.",
+      "Neither beforeSwapReturnsDelta nor afterSwapReturnsDelta.",
+      "Swaps and deposits work with empty hookData; the hook never reads it.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any pool may name this hook; each PoolId gets its own three counters.",
+    "fee": "Any. The hook does not read or set the fee.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "beforeSwapCount",
+      "type": "mapping(PoolId => uint256)",
+      "kind": "storage",
+      "writtenBy": [
+        "beforeSwap"
+      ],
+      "readBy": [
+        "anyone, through the public getter"
+      ]
+    },
+    {
+      "name": "afterSwapCount",
+      "type": "mapping(PoolId => uint256)",
+      "kind": "storage",
+      "writtenBy": [
+        "afterSwap"
+      ],
+      "readBy": [
+        "anyone, through the public getter"
+      ]
+    },
+    {
+      "name": "beforeAddLiquidityCount",
+      "type": "mapping(PoolId => uint256)",
+      "kind": "storage",
+      "writtenBy": [
+        "beforeAddLiquidity"
+      ],
+      "readBy": [
+        "anyone, through the public getter"
+      ]
+    },
+    {
+      "name": "poolManager",
+      "type": "IPoolManager",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "onlyPoolManager"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [],
+  "deltas": [
+    {
+      "callback": "beforeSwap",
+      "returns": "BeforeSwapDelta 0, fee override 0",
+      "currency": "none",
+      "settledBy": "Nobody. Without the beforeSwapReturnDelta bit the PoolManager does not read the delta, and a fee override is honoured only on a dynamic-fee pool."
+    },
+    {
+      "callback": "afterSwap",
+      "returns": "int128 0",
+      "currency": "unspecified currency of the swap",
+      "settledBy": "Nobody. Without the afterSwapReturnDelta bit the PoolManager does not read the value."
+    }
+  ],
+  "externalCalls": [],
+  "accessControl": [
+    {
+      "function": "beforeSwap, afterSwap, beforeAddLiquidity",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    },
+    {
+      "function": "beforeSwapCount, afterSwapCount, beforeAddLiquidityCount",
+      "caller": "anyone",
+      "enforcedBy": "view; no state change"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the three callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes `PoolId` collision is cryptographically infeasible."
+  ],
+  "doesNotGuarantee": [
+    "Does not count removals of liquidity, donations or pool initialisation: the address carries no flag for them.",
+    "Does not say what a counted swap or deposit achieved: who acted, in which direction, for how much, or at what price.",
+    "Does not count a swap the pool rejects. beforeSwap runs before the pool validates the swap, but its increment reverts with the call.",
+    "Does not restrict which pools use it. Anyone can initialise a pool that names this hook."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: beforeAddLiquidity, beforeSwap and afterSwap, mask 0x8C0.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address that carries two of the three bits.",
+      "test": "test_RevertWhen_PlacedAtAddressMissingOneFlag"
+    },
+    {
+      "statement": "After any 1 to 5 completed swaps, alternating direction, of 1 wei to 1e17 each, beforeSwapCount and afterSwapCount both equal the number of swaps.",
+      "test": "testFuzz_EveryCompletedSwapCountsOnceBeforeAndOnceAfter"
+    },
+    {
+      "statement": "Adding liquidity raises beforeAddLiquidityCount by one; removing liquidity changes no counter.",
+      "test": "test_AddLiquidity_IsCounted_RemoveLiquidity_IsNot"
+    },
+    {
+      "statement": "A swap the pool rejects after beforeSwap ran leaves every counter unchanged.",
+      "test": "test_SwapThePoolRejects_RanBeforeSwap_ButIsNotCounted"
+    },
+    {
+      "statement": "No caller other than the PoolManager can run a callback or move a counter.",
+      "test": "testFuzz_RevertWhen_CallerIsNotPoolManager"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "observation",
+      "counter",
+      "beforeSwap",
+      "afterSwap",
+      "beforeAddLiquidity"
+    ],
+    "integrations": []
+  }
+}

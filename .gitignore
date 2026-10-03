@@ -1,0 +1,17 @@
+# Foundry
+lib/
+out/
+cache/
+broadcast/*/31337/
+# Secrets: none belong in this repo, ever. Keys live in `cast wallet`.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+keystore/
+# .claude/ is committed, so every clone gets the no-AI-attribution guard. Only the
+# per-machine file is ignored: it lists the folders a session was granted, which are private.
+**/.claude/settings.local.json
+.DS_Store
+*.log
