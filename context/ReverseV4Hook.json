@@ -468,7 +468,28 @@
         "treasury": "0xA121e1eF31BbF0826aa67dc01e7977e80Af58D73",
         "treasuryShare": 99000
       },
-      "note": "Deployed, not source-verified on the explorer, and no pool has been opened on it yet. The credential registry is a testnet registry with a single issuer."
+      "note": "Deployed and used once on chain; not source-verified on the explorer. The credential registry is a testnet registry with a single issuer.",
+      "liveFire": {
+        "date": "2026-10-06",
+        "script": "script/DemoReverseV4Hook.s.sol at commit 9d79055",
+        "block": 47770933,
+        "transactions": 17,
+        "poolId": "0xe6bbe0aa838748e9fc6262526ab4541ba465e649a9a0e127276df78228a26458",
+        "positionTokenId": 32183,
+        "swaps": [
+          "0xe24465ee2edd82684b762bea260aee5c633b33924eb2338abfffd558bff5f267",
+          "0xa23a57b869a7470cdd48dc61c9be21be4cecc38227c1ad4ce152adaa91369969"
+        ],
+        "observed": {
+          "lpFeeBothSwapsPips": 500,
+          "hookFeePerSwap": "50000000000000",
+          "feesCollectedPerToken": "49974999999999",
+          "bonusClaimedPerToken": "7496249999999",
+          "treasurySweptPerToken": "4950000000000",
+          "potLeftPerToken": "37553750000001"
+        },
+        "notShown": "The base fee for a swapper without the credential: the one signer holds it. That path is covered by the fork tests only."
+      }
     }
   ],
   "directory": {
