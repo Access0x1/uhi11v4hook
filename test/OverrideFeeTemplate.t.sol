@@ -191,6 +191,35 @@ contract OverrideFeeTemplateTest is HookTestBase {
         assertEq(_feeCharged(router, member), fee < 1_000_000 ? fee : BASE_FEE, "LP fee charged");
     }
 
+    // ── 2b. native ETH ───────────────────────────────────────────────────────────────────────
+
+    /// @dev The template moves no funds, so ETH changes nothing but the plumbing: the same fees are
+    ///      charged when the input is ETH sent with the call.
+    function test_NativeEth_MemberAndStrangerAreChargedTheirFees() public {
+        PoolKey memory nativeKey = PoolKey({
+            currency0: Currency.wrap(address(0)),
+            currency1: currency1,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: TICK_SPACING,
+            hooks: IHooks(address(hook))
+        });
+        manager.initialize(nativeKey, TickMath.getSqrtPriceAtTick(0));
+        _addNativeLiquidity(nativeKey);
+        vm.deal(member, 1 ether);
+        vm.deal(stranger, 1 ether);
+
+        vm.recordLogs();
+        vm.prank(member);
+        router.swap{value: 0.01 ether}(-int256(0.01 ether), 0, true, nativeKey, "", member, block.timestamp);
+        assertEq(_lastSwapFee(vm.getRecordedLogs()), MEMBER_FEE, "member's LP fee paying in ETH");
+        assertEq(member.balance, 0.99 ether, "the member paid other than the ETH they asked to");
+
+        vm.recordLogs();
+        vm.prank(stranger);
+        router.swap{value: 0.01 ether}(-int256(0.01 ether), 0, true, nativeKey, "", stranger, block.timestamp);
+        assertEq(_lastSwapFee(vm.getRecordedLogs()), BASE_FEE, "stranger's LP fee paying in ETH");
+    }
+
     // ── 3. who the swapper is ────────────────────────────────────────────────────────────────
 
     function test_Swap_ThroughATrustedRouter_IsChargedTheSwappersFee() public {

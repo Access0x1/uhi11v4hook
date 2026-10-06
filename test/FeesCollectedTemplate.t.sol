@@ -199,6 +199,46 @@ contract FeesCollectedTemplateTest is HookTestBase {
         assertGt(hook.collected0(alice), 0, "fees collected while adding liquidity were not reported");
     }
 
+    // ── 2b. native ETH ───────────────────────────────────────────────────────────────────────
+
+    /// @dev A position in a native pool earns LP fees in ETH when ETH is swapped in. The hook is told
+    ///      the ETH amount, the same wei the owner receives.
+    function test_NativeEth_Collect_TellsTheHookTheFeesInEth() public {
+        Currency eth = Currency.wrap(address(0));
+        PoolKey memory nativeKey = _initNativePool(IHooks(address(hook)));
+
+        // The PositionManager is sent more ETH than the position needs; SWEEP returns the rest.
+        uint256 tokenId = posm.nextTokenId();
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR), uint8(Actions.SWEEP));
+        bytes[] memory params = new bytes[](3);
+        params[0] = abi.encode(
+            nativeKey, TICK_LOWER, TICK_UPPER, uint256(LIQUIDITY), type(uint128).max, type(uint128).max, bob, bytes("")
+        );
+        params[1] = abi.encode(eth, currency1);
+        params[2] = abi.encode(eth, bob);
+        vm.deal(bob, 1 ether);
+        vm.prank(bob);
+        posm.modifyLiquidities{value: 1 ether}(abi.encode(actions, params), block.timestamp);
+        assertGt(bob.balance, 0, "the unused ETH did not come back");
+
+        vm.deal(address(this), 1 ether);
+        _swapNative(nativeKey, true, -0.1 ether, 0.1 ether);
+
+        actions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
+        params = new bytes[](2);
+        params[0] = abi.encode(tokenId, uint256(0), uint128(0), uint128(0), bytes(""));
+        params[1] = abi.encode(eth, currency1, bob);
+        uint256 before = bob.balance;
+        vm.prank(bob);
+        posm.modifyLiquidities(abi.encode(actions, params), block.timestamp);
+
+        uint256 feesInEth = bob.balance - before;
+        assertGt(feesInEth, 0, "no fees were earned in ETH");
+        assertEq(hook.collected0(bob), feesInEth, "the hook was told another ETH amount than the owner received");
+        assertEq(hook.collected1(bob), 0, "fees were reported in the token, which nobody swapped in");
+    }
+
     // ── 3. what is skipped, without stopping anything ────────────────────────────────────────
 
     /// @dev A position held through another contract, with alice's token id as its salt: the one

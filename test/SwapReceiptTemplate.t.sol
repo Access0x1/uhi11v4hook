@@ -182,6 +182,31 @@ contract SwapReceiptTemplateTest is HookTestBase {
         assertEq(payer, address(0), "a payer was named for a router the hook does not trust");
     }
 
+    // ── 2b. native ETH ───────────────────────────────────────────────────────────────────────
+
+    /// @dev Paying in ETH: amount0 on the receipt is the ETH that left the buyer, in wei, negative.
+    function test_NativeEth_ReceiptCarriesTheEthPaid() public {
+        PoolKey memory nativeKey = _initNativePool(IHooks(address(hook)));
+        _addNativeLiquidity(nativeKey);
+        vm.deal(buyer, 1 ether);
+
+        vm.recordLogs();
+        vm.prank(buyer);
+        BalanceDelta delta = router.swap{value: 0.01 ether}(
+            -int256(0.01 ether), 0, true, nativeKey, abi.encode(PAYEE, ORDER), buyer, block.timestamp
+        );
+        Vm.Log memory r = _receipt(vm.getRecordedLogs());
+        (, address payer,, int128 amount0, int128 amount1) =
+            abi.decode(r.data, (bytes32, address, address, int128, int128));
+
+        assertEq(buyer.balance, 0.99 ether, "the buyer paid other than the ETH they asked to");
+        assertEq(amount0, -0.01 ether, "the receipt does not carry the ETH paid");
+        assertEq(amount1, delta.amount1(), "the receipt does not carry the tokens received");
+        assertEq(payer, buyer, "payer");
+        assertEq(r.topics[2], PoolId.unwrap(nativeKey.toId()), "the receipt names another pool");
+        assertTrue(hook.receipted(hook.receiptId(nativeKey.toId(), PAYEE, ORDER, buyer)), "the id was not recorded");
+    }
+
     // ── 3. no receipt, and the swap still goes through ───────────────────────────────────────
 
     function test_SwapWithNoHookData_WritesNothing() public {

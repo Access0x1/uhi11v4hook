@@ -197,6 +197,50 @@ contract GatedSwapTemplateTest is HookTestBase {
         assertLe(paid, BUDGET, "more input was paid than the budget");
     }
 
+    // ── 3b. native ETH ───────────────────────────────────────────────────────────────────────
+
+    /// @dev Called through `this.` so a revert can be caught and read. Forwards the ETH it is sent.
+    function swapNativeVia(PoolSwapTest through, PoolKey memory nativeKey, uint256 amountIn, bytes memory hookData)
+        external
+        payable
+        returns (BalanceDelta)
+    {
+        return through.swap{value: msg.value}(
+            nativeKey,
+            SwapParams({zeroForOne: true, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: MIN_PRICE_LIMIT}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            hookData
+        );
+    }
+
+    /// @dev The budget counts ETH the same way it counts a token: by the input requested. A refused
+    ///      swap returns the ETH that was sent with it.
+    function test_NativeEth_TheLimitCountsEthRequested_AndARefusedSwapKeepsNoEth() public {
+        PoolKey memory nativeKey = _initNativePool(IHooks(address(hook)));
+        _addNativeLiquidity(nativeKey);
+        vm.deal(address(this), 1 ether);
+
+        BalanceDelta delta =
+            this.swapNativeVia{value: 0.04 ether}(swapRouter, nativeKey, 0.04 ether, abi.encode(SESSION));
+        assertEq(delta.amount0(), -0.04 ether, "the ETH swap did not execute");
+        assertEq(hook.remaining(SESSION), BUDGET - 0.04 ether, "the budget did not fall by the ETH requested");
+
+        // 0.07 more would make 0.11 against a budget of 0.1.
+        try this.swapNativeVia{value: 0.07 ether}(swapRouter, nativeKey, 0.07 ether, abi.encode(SESSION)) {
+            fail("the gate let an ETH swap over the limit through");
+        } catch (bytes memory reason) {
+            assertEq(bytes4(_hookError(reason)), GatedSwapTemplate.OverLimit.selector, "refused for another reason");
+        }
+        try this.swapNativeVia{value: 0.01 ether}(outsider, nativeKey, 0.01 ether, abi.encode(SESSION)) {
+            fail("the gate let a stranger's ETH swap through");
+        } catch (bytes memory reason) {
+            assertEq(bytes4(_hookError(reason)), GatedSwapTemplate.NotAnExecutor.selector, "refused for another reason");
+        }
+
+        assertEq(address(this).balance, 0.96 ether, "ETH sent with a refused swap did not come back");
+        assertEq(hook.remaining(SESSION), BUDGET - 0.04 ether, "a refused ETH swap was counted");
+    }
+
     // ── 4. what the gate leaves alone ────────────────────────────────────────────────────────
 
     function test_Liquidity_IsOpenToAnyone() public {
