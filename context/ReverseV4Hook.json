@@ -65,7 +65,7 @@
   "pool": {
     "binding": "None. Any dynamic-fee pool may name this hook; each PoolId has its own pot per currency.",
     "fee": "Dynamic only (0x800000). beforeInitialize reverts PoolFeeNotDynamic for a static fee.",
-    "currencies": "Any. Native currency is not covered by a test."
+    "currencies": "Any. Native ETH as currency0 is covered by tests: the fee, the pot, the sweep and the claim."
   },
   "state": [
     {
@@ -341,7 +341,7 @@
   ],
   "doesNotGuarantee": [
     "Does not charge the hook fee on what an exact-input swap actually used. It is taken before the swap, on the amount requested, so a swap that stops at its price limit has paid the fee on all of it. A requested amount whose fee does not fit an int128 reverts.",
-    "Does not guarantee a bonus to the last wei. The constructor keeps the treasury's share out of the part of the pot bonuses can use, but the hook fee rounds down and the LP fee rounds up, so with the two shares adding to exactly 100% a bonus can be short by a wei or two per swap.",
+    "Does not guarantee a bonus to the last wei at every setting. The constructor keeps the treasury's share out of the part of the pot bonuses can use, but the hook fee rounds down and the LP fee rounds up: with the two shares adding to exactly 100% a bonus can be short by a wei or two per swap. A treasury share a tenth of a percent under the bound absorbs that for any swap large enough to pay a hook fee at all.",
     "Does not pay out what neither bonuses nor the treasury's share use; that remainder stays in the hook.",
     "Does not guarantee the full bonus. Swaps under 1e6 / hookFee wei pay LP fees but no hook fee; a pot short for that reason pays what it holds.",
     "Does not pay a bonus on fees still uncollected when a position is burned: the PositionManager burns the token first, so there is no owner to credit.",
@@ -349,7 +349,7 @@
     "Does not tie the bonus to how long the credential was held: it is checked when fees are collected, so a position can be transferred to a holder before collecting.",
     "Does not accept donations on its pools.",
     "Does not restrict which pools use it. Anyone can initialise a dynamic-fee pool that names this hook.",
-    "Native currency and fee-on-transfer tokens are not covered by a test."
+    "Fee-on-transfer and rebasing tokens are not covered by a test."
   ],
   "invariants": [
     {
@@ -429,8 +429,20 @@
       "test": "test_RevertWhen_TheTreasuryShareReachesIntoTheBonuses"
     },
     {
-      "statement": "With every position holding the credential and the treasury sweeping all it may after every swap, each collection is credited its full bonus less at most two wei per swap so far.",
+      "statement": "With a treasury share a tenth of a percent under the bound, every position holding the credential, and the treasury sweeping all it may after every swap of at least 1e12 wei, each collection is credited its bonus in full, to the wei.",
       "test": "testFuzz_WithEveryLpAHolder_AndTheTreasurySweeping_EveryBonusIsPaidInFull"
+    },
+    {
+      "statement": "A bonus on fees earned in native ETH is paid in ETH, and the hook never holds ETH itself.",
+      "test": "test_NativeEth_Claim_PaysTheBonusInEth"
+    },
+    {
+      "statement": "A claimer that claims again while being paid ETH is paid once.",
+      "test": "test_NativeEth_AClaimerThatClaimsAgainWhileBeingPaid_IsPaidOnce"
+    },
+    {
+      "statement": "A claimer that refuses ETH fails only its own claim; it is still owed and the pool still trades.",
+      "test": "test_NativeEth_AClaimerThatRefusesEth_FailsOnlyItsOwnClaim"
     }
   ],
   "deployments": [],

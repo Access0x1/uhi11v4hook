@@ -61,6 +61,49 @@ contract SettableCredential is ICredential {
     }
 }
 
+interface IApprovesOperators {
+    function setApprovalForAll(address operator, bool approved) external;
+}
+
+/// @dev Test-only. A contract that owns a position and claims its bonus. On being paid ETH it does
+///      whatever `mode` says: claim again before the first claim has finished, or refuse the ETH.
+contract ClaimerContract {
+    enum Mode {
+        Accept,
+        ClaimAgain,
+        Refuse
+    }
+
+    ReverseV4Hook public hook;
+    Mode public mode;
+    uint256 public timesPaid;
+    bytes4 public secondClaimRefusedWith;
+
+    constructor(ReverseV4Hook hook_, Mode mode_) {
+        hook = hook_;
+        mode = mode_;
+    }
+
+    function letOperate(address positionManager, address operator) external {
+        IApprovesOperators(positionManager).setApprovalForAll(operator, true);
+    }
+
+    function claimEth() external returns (uint256) {
+        return hook.claim(Currency.wrap(address(0)));
+    }
+
+    receive() external payable {
+        if (mode == Mode.Refuse) revert("no ETH here");
+        timesPaid++;
+        if (mode == Mode.ClaimAgain) {
+            try hook.claim(Currency.wrap(address(0))) {}
+            catch (bytes memory reason) {
+                secondClaimRefusedWith = bytes4(reason);
+            }
+        }
+    }
+}
+
 /// @dev Test-only. Opens the internal bonus rule so it can be fuzzed on its own.
 contract BonusRuleHarness is ReverseV4Hook {
     constructor(IPoolManager poolManager_, Config memory c) ReverseV4Hook(poolManager_, c) {}
@@ -88,7 +131,9 @@ contract ReverseV4HookTest is HookTestBase {
     uint24 internal constant MEMBER_FEE = 500; // 0.05%
     uint24 internal constant HOOK_FEE = 500; // 0.05% of the input
     uint24 internal constant BONUS_RATE = 150_000; // 15% of LP fees collected; the bound allows 16.66%
-    uint24 internal constant TREASURY_SHARE = 100_000; // 10%: what a 15% bonus on a 0.30% fee leaves of a 0.05% hook fee
+    /// @dev A 15% bonus on a 0.30% LP fee can use 90% of a 0.05% hook fee, so the constructor allows the
+    ///      treasury up to 10%. 9.9% leaves a tenth of a percent of every hook fee to absorb rounding.
+    uint24 internal constant TREASURY_SHARE = 99_000;
     uint256 internal constant PIPS = 1e6;
 
     bytes32 internal constant SWAP_TOPIC =
@@ -669,11 +714,11 @@ contract ReverseV4HookTest is HookTestBase {
     }
 
     /// @dev The worst case for the pot: every position holds the credential, and the treasury sweeps
-    ///      all it may after every step. Each collection must still be credited its bonus, in full up
-    ///      to rounding. At a share of exactly 10% the rates leave no slack on an exact-output swap:
-    ///      the hook fee rounds down and the LP fee rounds up, a wei or two per swap, so a bonus may
-    ///      be short by at most two wei for each swap so far. Swaps are at least 1e12, so that is
-    ///      under one part in a hundred million.
+    ///      all it may after every step. Each collection is still credited its bonus in full, to the
+    ///      wei. At a share of exactly 10% this fails by a wei or two per swap, because the hook fee
+    ///      rounds down and the LP fee rounds up; at 9.9% the spare tenth of a percent covers it.
+    ///      Swaps are at least 1e12 wei: a swap under 2000 wei pays LP fees and no hook fee at all,
+    ///      and no share can cover that.
     function testFuzz_WithEveryLpAHolder_AndTheTreasurySweeping_EveryBonusIsPaidInFull(uint256 seed, uint8 steps)
         public
     {
@@ -695,15 +740,111 @@ contract ReverseV4HookTest is HookTestBase {
             uint256 owed0 = hook.owed(who, currency0);
             uint256 owed1 = hook.owed(who, currency1);
             (uint256 fees0, uint256 fees1) = _collect(who, who == member ? memberTokenId : strangerTokenId);
-            assertLe(hook.owed(who, currency0) - owed0, _fullBonus(fees0), "currency0: more than the bonus was paid");
-            assertLe(hook.owed(who, currency1) - owed1, _fullBonus(fees1), "currency1: more than the bonus was paid");
-            assertGe(
-                hook.owed(who, currency0) - owed0 + 2 * (i + 1), _fullBonus(fees0), "currency0: a bonus was paid short"
-            );
-            assertGe(
-                hook.owed(who, currency1) - owed1 + 2 * (i + 1), _fullBonus(fees1), "currency1: a bonus was paid short"
-            );
+            assertEq(hook.owed(who, currency0) - owed0, _fullBonus(fees0), "currency0: a bonus was paid short");
+            assertEq(hook.owed(who, currency1) - owed1, _fullBonus(fees1), "currency1: a bonus was paid short");
         }
+    }
+
+    // ── 6c. native ETH: the bonus is claimed in ETH ──────────────────────────────────────────
+
+    Currency internal constant ETH = Currency.wrap(address(0));
+
+    /// @dev A native pool on the same hook, a position in it owned by `claimer` (a contract that
+    ///      holds the credential), ETH swapped in by a stranger, and the position's fees collected.
+    ///      Leaves `claimer` owed a bonus in ETH.
+    function _owedInEth(ClaimerContract claimer) internal returns (PoolKey memory nativeKey, uint256 owedEth) {
+        nativeKey = PoolKey({
+            currency0: ETH,
+            currency1: currency1,
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: TICK_SPACING,
+            hooks: IHooks(address(hook))
+        });
+        manager.initialize(nativeKey, TickMath.getSqrtPriceAtTick(0));
+        registry.set(address(claimer), CREDENTIAL_ID, true);
+        claimer.letOperate(address(posm), member);
+
+        // The member pays for the position; the claimer contract owns it. Unused ETH is swept back.
+        uint256 tokenId = posm.nextTokenId();
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR), uint8(Actions.SWEEP));
+        bytes[] memory params = new bytes[](3);
+        params[0] = abi.encode(
+            nativeKey,
+            TICK_LOWER,
+            TICK_UPPER,
+            uint256(LIQUIDITY),
+            type(uint128).max,
+            type(uint128).max,
+            address(claimer),
+            bytes("")
+        );
+        params[1] = abi.encode(ETH, currency1);
+        params[2] = abi.encode(ETH, member);
+        vm.deal(member, 1 ether);
+        vm.prank(member);
+        posm.modifyLiquidities{value: 1 ether}(abi.encode(actions, params), block.timestamp);
+
+        vm.deal(stranger, 1 ether);
+        vm.prank(stranger);
+        router.swap{value: 0.1 ether}(-int256(0.1 ether), 0, true, nativeKey, "", stranger, block.timestamp);
+
+        actions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
+        params = new bytes[](2);
+        params[0] = abi.encode(tokenId, uint256(0), uint128(0), uint128(0), bytes(""));
+        params[1] = abi.encode(ETH, currency1, member);
+        uint256 before = member.balance;
+        vm.prank(member);
+        posm.modifyLiquidities(abi.encode(actions, params), block.timestamp);
+
+        owedEth = hook.owed(address(claimer), ETH);
+        assertGt(member.balance - before, 0, "the position earned no fees in ETH");
+        assertEq(owedEth, _fullBonus(member.balance - before), "the bonus in ETH is not bonusRate of the ETH fees");
+        assertGt(owedEth, 0, "nothing is owed in ETH, so there is nothing to test");
+    }
+
+    function test_NativeEth_Claim_PaysTheBonusInEth() public {
+        ClaimerContract claimer = new ClaimerContract(hook, ClaimerContract.Mode.Accept);
+        (, uint256 owedEth) = _owedInEth(claimer);
+
+        assertEq(claimer.claimEth(), owedEth, "claim returned another amount");
+        assertEq(address(claimer).balance, owedEth, "the claimer was not paid in ETH");
+        assertEq(hook.owed(address(claimer), ETH), 0, "the debt was not cleared");
+        assertEq(address(hook).balance, 0, "the hook holds ETH itself");
+    }
+
+    /// @dev Paying ETH hands control to the claimer in the middle of a claim. It claims again. The
+    ///      second claim finds nothing owed, and the claimer ends with its bonus once.
+    function test_NativeEth_AClaimerThatClaimsAgainWhileBeingPaid_IsPaidOnce() public {
+        ClaimerContract claimer = new ClaimerContract(hook, ClaimerContract.Mode.ClaimAgain);
+        (PoolKey memory nativeKey, uint256 owedEth) = _owedInEth(claimer);
+        uint256 potBefore = hook.pot(nativeKey.toId(), ETH);
+
+        claimer.claimEth();
+
+        assertEq(claimer.timesPaid(), 1, "the claimer was not paid exactly once");
+        assertEq(
+            claimer.secondClaimRefusedWith(), ReverseV4Hook.NothingToClaim.selector, "the second claim was not refused"
+        );
+        assertEq(address(claimer).balance, owedEth, "the claimer holds other than what was owed");
+        assertEq(hook.pot(nativeKey.toId(), ETH), potBefore, "the second claim reached the pot");
+        assertEq(_claims(ETH), potBefore, "after the claim the hook's ETH claims differ from the pot");
+    }
+
+    /// @dev A claimer that cannot receive ETH fails its own claim and nothing else: it is still owed,
+    ///      the hook still holds the claims, and the pool still trades.
+    function test_NativeEth_AClaimerThatRefusesEth_FailsOnlyItsOwnClaim() public {
+        ClaimerContract claimer = new ClaimerContract(hook, ClaimerContract.Mode.Refuse);
+        (PoolKey memory nativeKey, uint256 owedEth) = _owedInEth(claimer);
+        uint256 held = _claims(ETH);
+
+        vm.expectRevert();
+        claimer.claimEth();
+
+        assertEq(hook.owed(address(claimer), ETH), owedEth, "a failed claim cleared the debt");
+        assertEq(_claims(ETH), held, "a failed claim changed the claims held");
+        vm.prank(stranger);
+        router.swap{value: 0.1 ether}(-int256(0.1 ether), 0, true, nativeKey, "", stranger, block.timestamp);
     }
 
     // ── 7. the bonus rule on its own ─────────────────────────────────────────────────────────
