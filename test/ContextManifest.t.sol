@@ -3,6 +3,7 @@ pragma solidity 0.8.30;
 
 import {HookTestBase} from "./utils/HookTestBase.sol";
 import {Counter} from "../src/Counter.sol";
+import {ReverseV4Hook} from "../src/ReverseV4Hook.sol";
 
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
@@ -12,6 +13,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 ///      the manifest is compared against what the hook itself declares.
 contract ContextManifestTest is HookTestBase {
     uint160 internal constant COUNTER_MASK = 0x8C0;
+    uint160 internal constant REVERSE_V4_HOOK_MASK = 0x25E4;
 
     function setUp() public {
         _deployV4();
@@ -22,6 +24,24 @@ contract ContextManifestTest is HookTestBase {
         _place(abi.encodePacked(type(Counter).creationCode, abi.encode(manager)), where);
 
         _assertManifestMatches("context/Counter.json", Counter(where).getHookPermissions());
+    }
+
+    /// @dev The constructor wants three contracts; the PoolManager stands in for each, since
+    ///      getHookPermissions() reads none of them.
+    function test_ReverseV4Hook_ManifestMatchesHook() public {
+        address where = _flagAddress(REVERSE_V4_HOOK_MASK);
+        address stand = address(manager);
+        _place(
+            abi.encodePacked(
+                type(ReverseV4Hook).creationCode,
+                abi.encode(
+                    manager, stand, bytes32(0), stand, stand, uint24(3000), uint24(500), uint24(500), uint24(150_000)
+                )
+            ),
+            where
+        );
+
+        _assertManifestMatches("context/ReverseV4Hook.json", ReverseV4Hook(where).getHookPermissions());
     }
 
     function _assertManifestMatches(string memory path, Hooks.Permissions memory p) internal view {

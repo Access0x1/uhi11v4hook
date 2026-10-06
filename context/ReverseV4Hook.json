@@ -1,0 +1,353 @@
+{
+  "schemaVersion": "0",
+  "name": "ReverseV4Hook",
+  "description": "For dynamic-fee pools. beforeSwap sets the LP fee: a lower fee for a swapper who holds a credential and came through one named router, the base fee otherwise. afterSwap takes a hook fee from the unspecified amount into a per-pool pot held as ERC-6909 claims. When a credential holder's PositionManager position collects LP fees, the hook credits a bonus on those fees out of the pot; the holder withdraws it with claim. Donations revert. No owner, no upgrade path.",
+  "status": "tested",
+  "source": {
+    "path": "src/ReverseV4Hook.sol",
+    "contract": "ReverseV4Hook",
+    "gitBlob": "d9b7706838e6feeb7465a62e8e93c6ba184463fa",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x25E4",
+    "callbacks": [
+      "beforeInitialize",
+      "afterAddLiquidity",
+      "afterRemoveLiquidity",
+      "beforeSwap",
+      "afterSwap",
+      "beforeDonate"
+    ],
+    "returnsDelta": true
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": true,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": true,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": true,
+      "beforeSwap": true,
+      "afterSwap": true,
+      "beforeDonate": true,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": true,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": true,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": false,
+      "swapAccess": "none"
+    }
+  },
+  "routing": {
+    "autoRoutable": false,
+    "needsHookData": false,
+    "reasons": [
+      "Dynamic fee: beforeSwap returns a fee override on every swap.",
+      "afterSwapReturnsDelta: the hook fee changes the swapper's unspecified amount.",
+      "Swaps and liquidity changes work with empty hookData; the hook never reads it.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any dynamic-fee pool may name this hook; each PoolId has its own pot per currency.",
+    "fee": "Dynamic only (0x800000). beforeInitialize reverts PoolFeeNotDynamic for a static fee.",
+    "currencies": "Any. Native currency is not covered by a test."
+  },
+  "state": [
+    {
+      "name": "pot",
+      "type": "mapping(PoolId => mapping(Currency => uint256))",
+      "kind": "storage",
+      "writtenBy": [
+        "afterSwap (adds the hook fee)",
+        "afterAddLiquidity, afterRemoveLiquidity (subtract a credited bonus)"
+      ],
+      "readBy": [
+        "anyone, through the public getter"
+      ]
+    },
+    {
+      "name": "owed",
+      "type": "mapping(address => mapping(Currency => uint256))",
+      "kind": "storage",
+      "writtenBy": [
+        "afterAddLiquidity, afterRemoveLiquidity (add a credited bonus)",
+        "claim (sets the caller's entry to zero)"
+      ],
+      "readBy": [
+        "anyone, through the public getter"
+      ]
+    },
+    {
+      "name": "poolManager",
+      "type": "IPoolManager",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "onlyPoolManager, afterSwap, claim, unlockCallback"
+      ]
+    },
+    {
+      "name": "credential",
+      "type": "ICredential",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap, afterAddLiquidity, afterRemoveLiquidity"
+      ]
+    },
+    {
+      "name": "credentialId",
+      "type": "bytes32",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "the same three callbacks"
+      ]
+    },
+    {
+      "name": "positionManager",
+      "type": "address",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "afterAddLiquidity, afterRemoveLiquidity"
+      ]
+    },
+    {
+      "name": "swapRouter",
+      "type": "address",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "baseFee",
+      "type": "uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "memberFee",
+      "type": "uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "hookFee",
+      "type": "uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "afterSwap"
+      ]
+    },
+    {
+      "name": "bonusRate",
+      "type": "uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "afterAddLiquidity, afterRemoveLiquidity"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [
+    {
+      "expression": "hook fee = |unspecified amount| * hookFee / 1e6",
+      "format": "pips, 1e6 = 100%",
+      "rounding": "down, in the swapper's favour"
+    },
+    {
+      "expression": "bonus = min(fees collected * bonusRate / 1e6, pot)",
+      "format": "pips, 1e6 = 100%",
+      "rounding": "down, in the pot's favour; a short pot pays what it holds"
+    },
+    {
+      "expression": "constructor requires bonusRate * baseFee <= hookFee * 1e6",
+      "format": "pips",
+      "rounding": "none; integer comparison"
+    }
+  ],
+  "deltas": [
+    {
+      "callback": "beforeSwap",
+      "returns": "BeforeSwapDelta 0, LP fee with the override flag",
+      "currency": "none",
+      "settledBy": "Nobody. The address has no beforeSwapReturnDelta bit."
+    },
+    {
+      "callback": "afterSwap",
+      "returns": "int128 hook fee, positive",
+      "currency": "unspecified currency of the swap",
+      "settledBy": "The hook, in the same callback, by minting itself ERC-6909 claims for that amount. The swapper's router pays or receives the difference."
+    },
+    {
+      "callback": "afterAddLiquidity, afterRemoveLiquidity",
+      "returns": "BalanceDelta 0",
+      "currency": "none",
+      "settledBy": "Nobody. The bonus is a ledger entry; it moves no currency until claim."
+    },
+    {
+      "callback": "unlockCallback (from claim)",
+      "returns": "none",
+      "currency": "the claimed currency",
+      "settledBy": "The hook burns its claims and takes the same amount to the claimer; the two cancel."
+    }
+  ],
+  "externalCalls": [
+    {
+      "target": "swapRouter",
+      "function": "msgSender()",
+      "why": "Immutable, set at deployment. Only this address is asked who the swapper is. In try/catch."
+    },
+    {
+      "target": "credential",
+      "function": "hasValidCredential(address,bytes32)",
+      "why": "Immutable, set at deployment. In try/catch; a revert counts as no credential."
+    },
+    {
+      "target": "positionManager",
+      "function": "ownerOf(uint256)",
+      "why": "Immutable, set at deployment. In try/catch; a burned token earns no bonus."
+    },
+    {
+      "target": "poolManager",
+      "function": "mint, burn, take, unlock",
+      "why": "The PoolManager the hook was deployed for."
+    }
+  ],
+  "accessControl": [
+    {
+      "function": "the six callbacks and unlockCallback",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager; reverts NotPoolManager"
+    },
+    {
+      "function": "claim",
+      "caller": "anyone, for their own balance only",
+      "enforcedBy": "reads owed[msg.sender]; reverts NothingToClaim at zero"
+    }
+  ],
+  "securityAssumptions": [
+    "The credential registry answers honestly. Whoever can grant a credential can grant the lower fee and the bonus.",
+    "The named swap router reports its real caller from msgSender().",
+    "The named PositionManager sets a position's salt to its token id and its ownerOf names the holder.",
+    "The pool trades near enough to parity in value that hookFee of the unspecified amount is worth at least bonusRate of the LP fee on the same swap. The constructor checks the rates, not prices."
+  ],
+  "doesNotGuarantee": [
+    "Does not guarantee a bonus. It is paid from the pot of the same currency as the fees, and the pot is filled in the swap's other currency; with one-way flow the pot for the fee currency can be empty.",
+    "Does not pay a bonus on fees still uncollected when a position is burned: the PositionManager burns the token first, so there is no owner to credit.",
+    "Does not pay a bonus to positions held through any contract other than the named PositionManager, or give the member fee through any router other than the named one.",
+    "Does not tie the bonus to how long the credential was held: it is checked when fees are collected, so a position can be transferred to a holder before collecting.",
+    "Does not accept donations on its pools.",
+    "Does not restrict which pools use it. Anyone can initialise a dynamic-fee pool that names this hook.",
+    "Native currency and fee-on-transfer tokens are not covered by a test."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the seven flags it declares, mask 0x25E4.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address missing one of the seven bits.",
+      "test": "test_RevertWhen_PlacedAtAddressMissingOneFlag"
+    },
+    {
+      "statement": "After any mix of swaps, fee collections and claims, the claims the hook holds in each currency equal the pot plus everything owed.",
+      "test": "testFuzz_ClaimsHeld_AlwaysEqualPotPlusOwed"
+    },
+    {
+      "statement": "A swap is charged memberFee only for a credential holder who came through the named router; otherwise baseFee. Read from the PoolManager's Swap event.",
+      "test": "test_Swap_StrangerPaysBaseFee_MemberPaysMemberFee"
+    },
+    {
+      "statement": "A second copy of the same router is not believed.",
+      "test": "test_Swap_ThroughASecondCopyOfTheRouter_MemberPaysBaseFee"
+    },
+    {
+      "statement": "A registry that reverts does not stop a swap; it is charged baseFee.",
+      "test": "test_Swap_WhenTheRegistryReverts_ExecutesAtBaseFee"
+    },
+    {
+      "statement": "Of two equal positions, only the credential holder's collection is credited, with bonusRate of the fees collected.",
+      "test": "test_Collect_CreditsTheMemberTheBonus_AndTheStrangerNothing"
+    },
+    {
+      "statement": "The bonus rule never returns more than the pot holds, and returns the full bonus when the pot allows.",
+      "test": "testFuzz_BonusRule_NeverExceedsThePot_AndIsFullWhenThePotAllows"
+    },
+    {
+      "statement": "An LP who swaps against their own position puts into the pot at least what their bonus takes out.",
+      "test": "testFuzz_TradingWithYourself_LeavesThePotNoSmaller"
+    },
+    {
+      "statement": "When the pot holds less than the full bonus, the member is credited exactly what it holds.",
+      "test": "test_Collect_WhenThePotIsShort_CreditsWhatIsThere"
+    },
+    {
+      "statement": "A donation reverts.",
+      "test": "test_RevertWhen_AnyoneDonates"
+    },
+    {
+      "statement": "A constructor bonus rate the hook fee does not cover reverts.",
+      "test": "test_RevertWhen_BonusIsNotCoveredByTheHookFee"
+    },
+    {
+      "statement": "No caller other than the PoolManager can run a callback or the unlock callback.",
+      "test": "testFuzz_RevertWhen_CallerIsNotPoolManager"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "dynamic fee",
+      "hook fee",
+      "loyalty",
+      "custom accounting",
+      "ERC-6909"
+    ],
+    "integrations": []
+  }
+}
