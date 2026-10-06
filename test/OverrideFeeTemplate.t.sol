@@ -3,6 +3,7 @@ pragma solidity 0.8.30;
 
 import {HookTestBase} from "./utils/HookTestBase.sol";
 import {OverrideFeeTemplate} from "../src/templates/OverrideFeeTemplate.sol";
+import {FeeOverride} from "../src/templates/FeeOverride.sol";
 
 import {Vm} from "forge-std/Vm.sol";
 import {Permit2Deployer} from "hookmate/artifacts/Permit2.sol";
@@ -172,7 +173,7 @@ contract OverrideFeeTemplateTest is HookTestBase {
     function test_RevertWhen_BaseFeeIsOneHundredPercent() public {
         (bool ok, bytes memory ret) = _tryPlace(_initcode(1_000_000), _flagAddress(PLACED_FLAGS | (uint160(1) << 20)));
         assertFalse(ok, "constructor accepted a 100% base fee");
-        assertEq(bytes4(ret), OverrideFeeTemplate.FeeTooLarge.selector, "reverted for another reason");
+        assertEq(bytes4(ret), FeeOverride.FeeTooLarge.selector, "reverted for another reason");
     }
 
     /// @dev Without the override flag a dynamic-fee pool charges its stored fee, which starts at 0.
