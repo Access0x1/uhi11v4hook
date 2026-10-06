@@ -20,7 +20,7 @@ cbor_metadata = false
 # forge 1.8.3 turns this on by default. It compiles tests through generated helper sources in a
 # temporary foundry-pp/ folder and then deletes that folder, so every later forge command warns
 # "Detected artifacts built from source files that no longer exist", and `forge clean` only quiets
-# it until the next build. Off, the warning is gone and the bytecode of src/ is byte for byte the
+# it until tests are compiled again. Off, the warning is gone and the bytecode of src/ is byte for byte the
 # same (measured 2026-10-06 on TestnetCredentialRegistry's creation code).
 dynamic_test_linking = false
 

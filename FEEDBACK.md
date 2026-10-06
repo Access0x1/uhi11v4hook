@@ -208,4 +208,4 @@ a `github.com` blob URL pinned to a commit SHA, and screenshot the submitted for
 
 | Partner | File | Status |
 |---|---|---|
-| | `docs/feedback/<partner>.md` | |
+| Foundry (forge, cast, anvil) | [`docs/feedback/foundry.md`](docs/feedback/foundry.md) | 5 entries, 2026-10-06, each reproduced the day it was written |
