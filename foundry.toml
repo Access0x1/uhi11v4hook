@@ -33,6 +33,12 @@ ffi = false
 # test/ContextManifest.t.sol checks each manifest against the hook it describes.
 fs_permissions = [{ access = "read", path = "./context" }]
 
+# Rehearsals against a live testnet's state: the official PositionManager, routers and the deployed
+# credential registry. Not part of `make gate`, which must pass with no network.
+#   BASE_SEPOLIA_RPC_URL=https://sepolia.base.org FOUNDRY_PROFILE=fork forge test
+[profile.fork]
+test = "test-fork"
+
 [fmt]
 line_length     = 120
 tab_width       = 4
