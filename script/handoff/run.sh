@@ -37,6 +37,8 @@ live=$(cast chain-id --rpc-url "$rpc")
 bal=$(cast balance "$SENDER" --rpc-url "$rpc")
 [ "$(python3 -c "print(int($bal >= $min))")" = 1 ] || { echo "STOP: $SENDER holds $bal wei, below $min"; exit 1; }
 
+# send is empty in a dry run. bash 3.2 (the Mac's /bin/bash) treats "${send[@]}" of an empty array as an
+# unset variable under `set -u`, so every use below is written ${send[@]+"${send[@]}"}.
 send=()
 if [ "${LIVE:-}" = 1 ]; then
   [ -t 0 ] || { echo "STOP: a live run needs a real terminal for the password prompt"; exit 1; }
@@ -48,22 +50,22 @@ fi
 echo "chain $chain | signer $SENDER | nonce $(cast nonce "$SENDER" --rpc-url "$rpc") | ${LIVE:+LIVE}${LIVE:-dry run}"
 case "$step" in
   deploy)
-    forge script script/DeployHook.s.sol:DeployHook --rpc-url "$rpc" --sender "$SENDER" "${send[@]}";;
+    forge script script/DeployHook.s.sol:DeployHook --rpc-url "$rpc" --sender "$SENDER" ${send[@]+"${send[@]}"};;
   demo)
     [ -n "$hook" ] || { echo "STOP: demo needs the hook address from the deploy step"; exit 1; }
     [ "$(cast code "$hook" --rpc-url "$rpc")" != 0x ] || { echo "STOP: no code at $hook. Deploy first."; exit 1; }
-    HOOK="$hook" forge script script/DeployHook.s.sol:DemoHook --rpc-url "$rpc" --sender "$SENDER" "${send[@]}";;
+    HOOK="$hook" forge script script/DeployHook.s.sol:DemoHook --rpc-url "$rpc" --sender "$SENDER" ${send[@]+"${send[@]}"};;
   deploy-reverse)
     : "${CREDENTIAL:?set CREDENTIAL}" "${CREDENTIAL_ID:?set CREDENTIAL_ID}" "${POSITION_MANAGER:?set POSITION_MANAGER}"
     : "${SWAP_ROUTER:?set SWAP_ROUTER}" "${TREASURY:?set TREASURY}"
     for a in "$CREDENTIAL" "$POSITION_MANAGER" "$SWAP_ROUTER"; do
       [ "$(cast code "$a" --rpc-url "$rpc")" != 0x ] || { echo "STOP: no code at $a on $net"; exit 1; }
     done
-    forge script script/DeployReverseV4Hook.s.sol:DeployReverseV4Hook --rpc-url "$rpc" --sender "$SENDER" "${send[@]}";;
+    forge script script/DeployReverseV4Hook.s.sol:DeployReverseV4Hook --rpc-url "$rpc" --sender "$SENDER" ${send[@]+"${send[@]}"};;
   deploy-registry)
     ISSUER=${ISSUER:-$SENDER}
     case "$ISSUER" in 0x[0-9a-fA-F][0-9a-fA-F]*) [ ${#ISSUER} -eq 42 ] || { echo "STOP: ISSUER is not an address: $ISSUER"; exit 1; };; *) echo "STOP: ISSUER is not an address: $ISSUER"; exit 1;; esac
     echo "issuer $ISSUER (permanent)"
-    ISSUER="$ISSUER" forge script script/DeployTestnetCredentialRegistry.s.sol:DeployTestnetCredentialRegistry --rpc-url "$rpc" --sender "$SENDER" "${send[@]}";;
+    ISSUER="$ISSUER" forge script script/DeployTestnetCredentialRegistry.s.sol:DeployTestnetCredentialRegistry --rpc-url "$rpc" --sender "$SENDER" ${send[@]+"${send[@]}"};;
   *) echo "STOP: unknown step $step"; exit 1;;
 esac
