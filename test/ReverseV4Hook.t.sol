@@ -88,7 +88,7 @@ contract ReverseV4HookTest is HookTestBase {
     uint24 internal constant MEMBER_FEE = 500; // 0.05%
     uint24 internal constant HOOK_FEE = 500; // 0.05% of the input
     uint24 internal constant BONUS_RATE = 150_000; // 15% of LP fees collected; the bound allows 16.66%
-    uint24 internal constant TREASURY_SHARE = 500_000; // the treasury may sweep at most half of the hook fees
+    uint24 internal constant TREASURY_SHARE = 100_000; // 10%: what a 15% bonus on a 0.30% fee leaves of a 0.05% hook fee
     uint256 internal constant PIPS = 1e6;
 
     bytes32 internal constant SWAP_TOPIC =
@@ -165,6 +165,27 @@ contract ReverseV4HookTest is HookTestBase {
                     bonusRate: bonusRate,
                     treasury: treasury,
                     treasuryShare: TREASURY_SHARE
+                })
+            )
+        );
+    }
+
+    function _initcodeWith(uint24 bonusRate, uint24 share) internal view returns (bytes memory) {
+        return abi.encodePacked(
+            type(ReverseV4Hook).creationCode,
+            abi.encode(
+                manager,
+                ReverseV4Hook.Config({
+                    credential: registry,
+                    credentialId: CREDENTIAL_ID,
+                    positionManager: address(posm),
+                    swapRouter: address(router),
+                    baseFee: BASE_FEE,
+                    memberFee: MEMBER_FEE,
+                    hookFee: HOOK_FEE,
+                    bonusRate: bonusRate,
+                    treasury: treasury,
+                    treasuryShare: share
                 })
             )
         );
@@ -290,9 +311,23 @@ contract ReverseV4HookTest is HookTestBase {
         assertFalse(ok, "constructor accepted a bonus the hook fee does not cover");
         assertEq(bytes4(ret), ReverseV4Hook.BonusNotCoveredByHookFee.selector, "reverted for another reason");
 
-        // 166_666 * 3000 = 499_998_000 <= 500 * 1e6: the largest rate the bound allows.
-        (ok,) = _tryPlace(_initcode(type(ReverseV4Hook).creationCode, BASE_FEE, MEMBER_FEE, HOOK_FEE, 166_666), other);
+        // 166_666 * 3000 = 499_998_000 <= 500 * 1e6: the largest rate the bound allows. It leaves the
+        // treasury nothing, so it is accepted only with a treasury share of zero.
+        (ok,) = _tryPlace(_initcodeWith(166_666, 0), other);
         assertTrue(ok, "constructor refused the largest bonus the hook fee covers");
+    }
+
+    /// @dev A 15% bonus on a 0.30% LP fee can use 90% of a 0.05% hook fee. The treasury may have the
+    ///      other 10% and not one pip more.
+    function test_RevertWhen_TheTreasuryShareReachesIntoTheBonuses() public {
+        address other = _flagAddress(PLACED_FLAGS | (uint160(1) << 20));
+
+        (bool ok, bytes memory ret) = _tryPlace(_initcodeWith(BONUS_RATE, 100_001), other);
+        assertFalse(ok, "constructor accepted a treasury share the bonuses do not leave room for");
+        assertEq(bytes4(ret), ReverseV4Hook.TreasuryShareNotCovered.selector, "reverted for another reason");
+
+        (ok,) = _tryPlace(_initcodeWith(BONUS_RATE, 100_000), other);
+        assertTrue(ok, "constructor refused the largest share the bonuses leave room for");
     }
 
     function test_RevertWhen_MemberFeeIsAboveBaseFee() public {
@@ -631,6 +666,44 @@ contract ReverseV4HookTest is HookTestBase {
         assertEq(hook.sweepable(id, currency0), 0, "sweepable from an empty pot");
         vm.expectRevert(HookFeePotTemplate.NothingToSweep.selector);
         hook.sweep(id, currency0);
+    }
+
+    /// @dev The worst case for the pot: every position holds the credential, and the treasury sweeps
+    ///      all it may after every step. Each collection must still be credited its bonus, in full up
+    ///      to rounding. At a share of exactly 10% the rates leave no slack on an exact-output swap:
+    ///      the hook fee rounds down and the LP fee rounds up, a wei or two per swap, so a bonus may
+    ///      be short by at most two wei for each swap so far. Swaps are at least 1e12, so that is
+    ///      under one part in a hundred million.
+    function testFuzz_WithEveryLpAHolder_AndTheTreasurySweeping_EveryBonusIsPaidInFull(uint256 seed, uint8 steps)
+        public
+    {
+        registry.set(stranger, CREDENTIAL_ID, true);
+        address swapper = makeAddr("a swapper without the credential");
+        _fund(swapper);
+
+        uint256 n = bound(steps, 2, 8);
+        for (uint256 i = 0; i < n; i++) {
+            uint256 r = uint256(keccak256(abi.encode(seed, i)));
+            uint256 amount = bound(r >> 16, 1e12, 1e17);
+            if (r % 2 == 0) _routerSwap(swapper, (r >> 8) % 2 == 0, amount);
+            else _routerSwapExactOut(swapper, (r >> 8) % 2 == 0, amount);
+
+            if (hook.sweepable(id, currency0) > 0) hook.sweep(id, currency0);
+            if (hook.sweepable(id, currency1) > 0) hook.sweep(id, currency1);
+
+            address who = (r >> 12) % 2 == 0 ? member : stranger;
+            uint256 owed0 = hook.owed(who, currency0);
+            uint256 owed1 = hook.owed(who, currency1);
+            (uint256 fees0, uint256 fees1) = _collect(who, who == member ? memberTokenId : strangerTokenId);
+            assertLe(hook.owed(who, currency0) - owed0, _fullBonus(fees0), "currency0: more than the bonus was paid");
+            assertLe(hook.owed(who, currency1) - owed1, _fullBonus(fees1), "currency1: more than the bonus was paid");
+            assertGe(
+                hook.owed(who, currency0) - owed0 + 2 * (i + 1), _fullBonus(fees0), "currency0: a bonus was paid short"
+            );
+            assertGe(
+                hook.owed(who, currency1) - owed1 + 2 * (i + 1), _fullBonus(fees1), "currency1: a bonus was paid short"
+            );
+        }
     }
 
     // ── 7. the bonus rule on its own ─────────────────────────────────────────────────────────

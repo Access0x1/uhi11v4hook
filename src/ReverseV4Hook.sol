@@ -24,6 +24,7 @@ import {FeeOverride} from "./templates/FeeOverride.sol";
 ///         3. When a credential holder's position collects LP fees, the hook credits that holder a bonus of
 ///            `bonusRate` on the fees collected, out of the pot. The holder withdraws it with `claim`.
 ///         4. A treasury set at deployment may take up to `treasuryShare` of the hook fees, through `sweep`.
+///            The share is bounded at deployment so that it cannot be taken out of the bonuses' part.
 /// @dev Built from this repository's templates, and its mask is theirs combined:
 ///        HookFeePotTemplate    0xCC    beforeSwap, afterSwap and both swap returns-delta flags
 ///        FeesCollectedTemplate 0x500   afterAddLiquidity, afterRemoveLiquidity
@@ -50,6 +51,8 @@ contract ReverseV4Hook is HookFeePotTemplate, FeesCollectedTemplate, SwapperIden
     error MemberFeeAboveBaseFee();
     /// @dev bonusRate * baseFee must not exceed hookFee * 1e6. See the constructor.
     error BonusNotCoveredByHookFee();
+    /// @dev treasuryShare * hookFee + bonusRate * baseFee must not exceed hookFee * 1e6. See the constructor.
+    error TreasuryShareNotCovered();
     error DonationsNotAccepted();
     error NothingToClaim();
 
@@ -75,6 +78,11 @@ contract ReverseV4Hook is HookFeePotTemplate, FeesCollectedTemplate, SwapperIden
     ///      input, and with it a bonus of bonusRate on that fee. The same swap pays hookFee of the input
     ///      into the pot, in the same currency. While bonusRate * baseFee <= hookFee * 1e6, the swap puts
     ///      in at least what the bonus takes out.
+    ///
+    ///      The bound on treasuryShare keeps the treasury out of the bonuses' part of the pot. Bonuses
+    ///      can use at most bonusRate * baseFee / hookFee of the hook fees, which happens when every
+    ///      position holds the credential. The treasury's share must fit in what is left:
+    ///      treasuryShare + bonusRate * baseFee / hookFee <= 100%, written without the division.
     constructor(IPoolManager poolManager_, Config memory c)
         BaseHook(poolManager_)
         HookFeePotTemplate(c.hookFee, c.treasury, c.treasuryShare)
@@ -87,6 +95,9 @@ contract ReverseV4Hook is HookFeePotTemplate, FeesCollectedTemplate, SwapperIden
         if (address(c.credential).code.length == 0) revert NotAContract(address(c.credential));
         if (c.memberFee > c.baseFee) revert MemberFeeAboveBaseFee();
         if (uint256(c.bonusRate) * c.baseFee > uint256(c.hookFee) * PIPS) revert BonusNotCoveredByHookFee();
+        if (uint256(c.treasuryShare) * c.hookFee + uint256(c.bonusRate) * c.baseFee > uint256(c.hookFee) * PIPS) {
+            revert TreasuryShareNotCovered();
+        }
 
         credential = c.credential;
         credentialId = c.credentialId;

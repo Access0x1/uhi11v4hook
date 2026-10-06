@@ -6,7 +6,7 @@
   "source": {
     "path": "src/ReverseV4Hook.sol",
     "contract": "ReverseV4Hook",
-    "gitBlob": "b2a1dd9fe84df52d615451fc11b18f83448911be",
+    "gitBlob": "b2c2f13fdb175dcf14ac637fa8b5873b47541ae8",
     "inherits": "This repository's HookFeePotTemplate, FeesCollectedTemplate, SwapperIdentity and FeeOverride, over OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
   },
   "compiler": {
@@ -261,6 +261,11 @@
       "expression": "sweepable = min(pot, feesTaken * treasuryShare / 1e6 - swept)",
       "format": "pips, 1e6 = 100%",
       "rounding": "down, against the treasury"
+    },
+    {
+      "expression": "constructor requires treasuryShare * hookFee + bonusRate * baseFee <= hookFee * 1e6",
+      "format": "pips",
+      "rounding": "none; integer comparison"
     }
   ],
   "deltas": [
@@ -336,7 +341,7 @@
   ],
   "doesNotGuarantee": [
     "Does not charge the hook fee on what an exact-input swap actually used. It is taken before the swap, on the amount requested, so a swap that stops at its price limit has paid the fee on all of it. A requested amount whose fee does not fit an int128 reverts.",
-    "Does not guarantee the treasury's share leaves enough for every bonus. The treasury may take up to treasuryShare of all hook fees; bonuses can need up to bonusRate * baseFee / hookFee of them when every position holds the credential. If the two shares add up to more than 100%, whichever comes first is paid and the other is short.",
+    "Does not guarantee a bonus to the last wei. The constructor keeps the treasury's share out of the part of the pot bonuses can use, but the hook fee rounds down and the LP fee rounds up, so with the two shares adding to exactly 100% a bonus can be short by a wei or two per swap.",
     "Does not pay out what neither bonuses nor the treasury's share use; that remainder stays in the hook.",
     "Does not guarantee the full bonus. Swaps under 1e6 / hookFee wei pay LP fees but no hook fee; a pot short for that reason pays what it holds.",
     "Does not pay a bonus on fees still uncollected when a position is burned: the PositionManager burns the token first, so there is no owner to credit.",
@@ -418,6 +423,14 @@
     {
       "statement": "A sweep cannot reach what has been credited to an LP.",
       "test": "test_Sweep_NeverReachesWhatIsOwed"
+    },
+    {
+      "statement": "A treasury share that reaches into the part of the hook fees bonuses can use is refused at deployment.",
+      "test": "test_RevertWhen_TheTreasuryShareReachesIntoTheBonuses"
+    },
+    {
+      "statement": "With every position holding the credential and the treasury sweeping all it may after every swap, each collection is credited its full bonus less at most two wei per swap so far.",
+      "test": "testFuzz_WithEveryLpAHolder_AndTheTreasurySweeping_EveryBonusIsPaidInFull"
     }
   ],
   "deployments": [],

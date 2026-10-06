@@ -42,7 +42,7 @@ contract ContextManifestTest is HookTestBase {
             hookFee: 500,
             bonusRate: 150_000,
             treasury: stand,
-            treasuryShare: 500_000
+            treasuryShare: 100_000
         });
         _place(abi.encodePacked(type(ReverseV4Hook).creationCode, abi.encode(manager, config)), where);
 
