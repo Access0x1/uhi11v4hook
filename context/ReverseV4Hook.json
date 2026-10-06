@@ -2,7 +2,7 @@
   "schemaVersion": "0",
   "name": "ReverseV4Hook",
   "description": "For dynamic-fee pools. beforeSwap sets the LP fee: lower for a swapper who holds a credential and came through one named router, the base fee otherwise. Every swap pays a hook fee on its input into a per-pool pot held as ERC-6909 claims. A credential holder's PositionManager position is credited a bonus on the LP fees it collects, out of the pot, and withdraws it with claim. A fixed treasury may sweep a fixed share of the hook fees. Donations revert. No owner, no upgrade path.",
-  "status": "deployed",
+  "status": "live-fired",
   "source": {
     "path": "src/ReverseV4Hook.sol",
     "contract": "ReverseV4Hook",
@@ -454,7 +454,7 @@
       "block": 47770189,
       "salt": 25543,
       "commit": "fe2c56f",
-      "verified": false,
+      "verified": true,
       "constructor": {
         "poolManager": "0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408",
         "credential": "0xa9C3AaA0bca5f894bD5099Ef0308E28881C21186",
@@ -468,7 +468,7 @@
         "treasury": "0xA121e1eF31BbF0826aa67dc01e7977e80Af58D73",
         "treasuryShare": 99000
       },
-      "note": "Deployed and used once on chain; not source-verified on the explorer. The credential registry is a testnet registry with a single issuer.",
+      "note": "Deployed, source-verified on Basescan (Etherscan V2, 2026-10-06: the published source contains this contract, 3,182 lines; a control address with no contract reads as not verified) and used once on chain. The credential registry is a testnet registry with a single issuer.",
       "liveFire": {
         "date": "2026-10-06",
         "script": "script/DemoReverseV4Hook.s.sol at commit 9d79055",
@@ -489,7 +489,8 @@
           "potLeftPerToken": "37553750000001"
         },
         "notShown": "The base fee for a swapper without the credential: the one signer holds it. That path is covered by the fork tests only."
-      }
+      },
+      "explorer": "https://sepolia.basescan.org/address/0x03C77a74F3ecBc519F3590F5aff405a57401e5ec#code"
     }
   ],
   "directory": {
