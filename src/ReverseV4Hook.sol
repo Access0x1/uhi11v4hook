@@ -13,7 +13,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IMsgSender} from "@uniswap/v4-periphery/src/interfaces/IMsgSender.sol";
 
@@ -27,12 +27,14 @@ interface IPositionOwner {
 /// @title ReverseV4Hook
 /// @notice A loyalty hook with its own accounting, for dynamic-fee pools.
 ///         1. A swapper who holds the credential pays `memberFee` to the pool's LPs; anyone else pays `baseFee`.
-///         2. Every swap also pays `hookFee` on its unspecified amount into a per-pool pot the hook holds.
+///         2. Every swap also pays `hookFee` on its input into a per-pool pot the hook holds.
 ///         3. When a credential holder's position collects LP fees, the hook credits that holder a bonus of
 ///            `bonusRate` on the fees collected, out of the pot. The holder withdraws it with `claim`.
-/// @dev Seven flags, so seven bits in the address:
+/// @dev Eight flags, so eight bits in the address:
 ///      beforeInitialize 0x2000 | afterAddLiquidity 0x400 | afterRemoveLiquidity 0x100 | beforeSwap 0x80
-///      | afterSwap 0x40 | beforeDonate 0x20 | afterSwapReturnDelta 0x04 = 0x25E4.
+///      | afterSwap 0x40 | beforeDonate 0x20 | beforeSwapReturnDelta 0x08 | afterSwapReturnDelta 0x04 = 0x25EC.
+///      LP fees are paid in a swap's input currency. The hook fee is taken in that same currency, so
+///      the pot that pays a bonus on those LP fees is filled by the very swaps that produced them.
 ///      No owner, no upgrade path, every parameter immutable.
 contract ReverseV4Hook is BaseHook, IUnlockCallback {
     using LPFeeLibrary for uint24;
@@ -55,7 +57,7 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
     uint24 public immutable baseFee;
     /// @notice LP fee for a credential holder who came through `swapRouter`.
     uint24 public immutable memberFee;
-    /// @notice Taken from every swap's unspecified amount, into the pot.
+    /// @notice Taken from every swap's input, into the pot.
     uint24 public immutable hookFee;
     /// @notice Bonus on LP fees collected by a credential holder's position, paid out of the pot.
     uint24 public immutable bonusRate;
@@ -83,9 +85,9 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
     ///
     ///      The bound on bonusRate is what makes trading with yourself unprofitable. Someone who is the
     ///      only in-range LP gets the LP fee of their own swap straight back, at most baseFee of the
-    ///      volume, and with it a bonus of bonusRate on that fee. The same swap pays hookFee of the volume
-    ///      into the pot. While bonusRate * baseFee <= hookFee * 1e6, the swap puts in at least what the
-    ///      bonus takes out.
+    ///      input, and with it a bonus of bonusRate on that fee. The same swap pays hookFee of the input
+    ///      into the pot, in the same currency. While bonusRate * baseFee <= hookFee * 1e6, the swap puts
+    ///      in at least what the bonus takes out.
     constructor(
         IPoolManager poolManager_,
         ICredential credential_,
@@ -127,6 +129,7 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
         permissions.beforeSwap = true;
         permissions.afterSwap = true;
         permissions.beforeDonate = true;
+        permissions.beforeSwapReturnDelta = true;
         permissions.afterSwapReturnDelta = true;
     }
 
@@ -155,9 +158,13 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
     /// @dev Returns the LP fee for this swap, always with the override flag: a dynamic-fee pool starts
     ///      at fee 0 (LPFeeLibrary.getInitialLPFee), so a swap without an override would be free.
     ///      `sender` is the router, never the person. Only `swapRouter` is asked who called it.
-    function _beforeSwap(address sender, PoolKey calldata, SwapParams calldata, bytes calldata)
+    ///
+    ///      For an exact-input swap the input is the specified currency, and this is the only callback
+    ///      that can change the specified amount. The hook fee is taken here, on the amount REQUESTED:
+    ///      the pool then swaps the rest. A swap that stops early at its price limit has still paid the
+    ///      fee on everything it asked to swap.
+    function _beforeSwap(address sender, PoolKey calldata key, SwapParams calldata params, bytes calldata)
         internal
-        view
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
@@ -167,33 +174,43 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
                 if (_holdsCredential(swapper)) fee = memberFee;
             } catch {}
         }
-        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
+
+        int128 taken;
+        if (params.amountSpecified < 0) {
+            uint256 feeAmount = FullMath.mulDiv(uint256(-params.amountSpecified), hookFee, PIPS);
+            taken = _toPot(key, params.zeroForOne ? key.currency0 : key.currency1, feeAmount);
+        }
+        return (this.beforeSwap.selector, toBeforeSwapDelta(taken, 0), fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
     }
 
-    /// @dev Takes hookFee of the unspecified amount, as ERC-6909 claims on the PoolManager, and adds it
-    ///      to this pool's pot. The unspecified currency is the output of an exact-input swap and the
-    ///      input of an exact-output swap. The returned amount is what the swapper's side of the swap
-    ///      is charged; the claims minted here settle it. Rounds down, in the swapper's favour.
+    /// @dev For an exact-output swap the input is the unspecified currency, known only now. The hook
+    ///      fee is taken on what the pool charged, and the swapper pays it on top. An exact-input swap
+    ///      paid in beforeSwap and is left alone here.
     function _afterSwap(address, PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata)
         internal
         override
         returns (bytes4, int128)
     {
-        (Currency unspecified, int128 unspecifiedDelta) = (params.amountSpecified < 0 == params.zeroForOne)
-            ? (key.currency1, delta.amount1())
-            : (key.currency0, delta.amount0());
+        if (params.amountSpecified < 0) return (this.afterSwap.selector, 0);
 
-        uint256 unspecifiedAmount =
-            unspecifiedDelta < 0 ? uint256(uint128(-unspecifiedDelta)) : uint256(uint128(unspecifiedDelta));
-        uint256 feeAmount = FullMath.mulDiv(unspecifiedAmount, hookFee, PIPS);
-        if (feeAmount == 0) return (this.afterSwap.selector, 0);
+        (Currency input, int128 inputDelta) =
+            params.zeroForOne ? (key.currency0, delta.amount0()) : (key.currency1, delta.amount1());
+        // The swapper owes the input, so its delta is negative.
+        uint256 paid = inputDelta < 0 ? uint256(uint128(-inputDelta)) : 0;
+        return (this.afterSwap.selector, _toPot(key, input, FullMath.mulDiv(paid, hookFee, PIPS)));
+    }
 
-        unspecified.take(poolManager, address(this), feeAmount, true);
+    /// @dev Takes `feeAmount` of `currency` as ERC-6909 claims on the PoolManager and adds it to the
+    ///      pool's pot. The value returned goes back to the PoolManager as the hook's delta, which
+    ///      charges the swapper and cancels the claims minted here. Fees round down, in the swapper's favour.
+    function _toPot(PoolKey calldata key, Currency currency, uint256 feeAmount) internal returns (int128) {
+        if (feeAmount == 0) return 0;
+
+        currency.take(poolManager, address(this), feeAmount, true);
         PoolId id = key.toId();
-        pot[id][unspecified] += feeAmount;
-        emit HookFeeTaken(id, unspecified, feeAmount);
-
-        return (this.afterSwap.selector, feeAmount.toInt128());
+        pot[id][currency] += feeAmount;
+        emit HookFeeTaken(id, currency, feeAmount);
+        return feeAmount.toInt128();
     }
 
     // ── liquidity ────────────────────────────────────────────────────────────────────────────

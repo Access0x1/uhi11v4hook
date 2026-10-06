@@ -93,20 +93,20 @@ contract BonusRuleHarness is ReverseV4Hook {
 contract ReverseV4HookTest is HookTestBase {
     /// @dev The mask this hook must carry, as a literal: beforeInitialize (1 << 13) | afterAddLiquidity
     ///      (1 << 10) | afterRemoveLiquidity (1 << 8) | beforeSwap (1 << 7) | afterSwap (1 << 6)
-    ///      | beforeDonate (1 << 5) | afterSwapReturnDelta (1 << 2).
-    uint160 internal constant EXPECTED_MASK = 0x25E4;
+    ///      | beforeDonate (1 << 5) | beforeSwapReturnDelta (1 << 3) | afterSwapReturnDelta (1 << 2).
+    uint160 internal constant EXPECTED_MASK = 0x25EC;
 
     /// @dev The low 14 bits of the address setUp() places the hook at.
     uint160 internal constant PLACED_FLAGS = uint160(
         Hooks.BEFORE_INITIALIZE_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
             | Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.BEFORE_DONATE_FLAG
-            | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+            | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
     );
 
     bytes32 internal constant CREDENTIAL_ID = keccak256("member");
     uint24 internal constant BASE_FEE = 3000; // 0.30%
     uint24 internal constant MEMBER_FEE = 500; // 0.05%
-    uint24 internal constant HOOK_FEE = 500; // 0.05% of the unspecified amount
+    uint24 internal constant HOOK_FEE = 500; // 0.05% of the input
     uint24 internal constant BONUS_RATE = 150_000; // 15% of LP fees collected; the bound allows 16.66%
     uint256 internal constant PIPS = 1e6;
 
@@ -238,6 +238,12 @@ contract ReverseV4HookTest is HookTestBase {
         router.swap(-int256(amountIn), 0, zeroForOne, key, "", who, block.timestamp);
     }
 
+    /// @dev Exact-output swap through the same router, with no limit on the input.
+    function _routerSwapExactOut(address who, bool zeroForOne, uint256 amountOut) internal {
+        vm.prank(who);
+        router.swap(int256(amountOut), type(uint256).max, zeroForOne, key, "", who, block.timestamp);
+    }
+
     /// @dev The `fee` field of the last Swap event the PoolManager emitted: the LP fee charged, in pips.
     function _lastSwapFee(Vm.Log[] memory logs) internal view returns (uint24 fee) {
         bool found;
@@ -264,11 +270,11 @@ contract ReverseV4HookTest is HookTestBase {
         uint160 addressBits = uint160(address(hook)) & Hooks.ALL_HOOK_MASK;
         uint160 declared = _maskOf(hook.getHookPermissions());
 
-        assertEq(declared, EXPECTED_MASK, "hook declares something other than its seven flags");
-        assertEq(addressBits, EXPECTED_MASK, "address does not carry 0x25E4 in its low 14 bits");
+        assertEq(declared, EXPECTED_MASK, "hook declares something other than its eight flags");
+        assertEq(addressBits, EXPECTED_MASK, "address does not carry 0x25EC in its low 14 bits");
     }
 
-    /// @dev The permanent twin of the sabotage. Six of the seven bits are right; that is not enough.
+    /// @dev The permanent twin of the sabotage. Seven of the eight bits are right; that is not enough.
     function test_RevertWhen_PlacedAtAddressMissingOneFlag() public {
         address wrong = _flagAddress(PLACED_FLAGS & ~uint160(Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG));
 
@@ -375,17 +381,43 @@ contract ReverseV4HookTest is HookTestBase {
 
     // ── 4. the hook fee and the pot ──────────────────────────────────────────────────────────
 
-    function test_Swap_PutsTheHookFeeInThePot_AsClaims() public {
-        uint256 before = _token(currency1).balanceOf(stranger);
+    function test_ExactInputSwap_PaysTheHookFeeOnItsInput_IntoThePot_AsClaims() public {
+        uint256 before = _token(currency0).balanceOf(stranger);
         _routerSwap(stranger, true, 1e18);
-        uint256 received = _token(currency1).balanceOf(stranger) - before;
 
-        // The swapper received the pool's output less the hook fee: fee = output * 500 / 1e6, rounded down.
-        uint256 fee = hook.pot(id, currency1);
+        assertEq(before - _token(currency0).balanceOf(stranger), 1e18, "the swapper paid other than what they asked to");
+        assertEq(hook.pot(id, currency0), 1e18 * uint256(HOOK_FEE) / PIPS, "hook fee is not 0.05% of the input");
+        assertEq(_claims(currency0), hook.pot(id, currency0), "the pot is not backed one for one by claims");
+        assertEq(hook.pot(id, currency1), 0, "the output currency's pot moved");
+    }
+
+    /// @dev The swapper names the output and pays the hook fee on top of what the pool charges.
+    function test_ExactOutputSwap_PaysTheHookFeeOnItsInput_OnTop() public {
+        uint256 in0 = _token(currency0).balanceOf(stranger);
+        uint256 out1 = _token(currency1).balanceOf(stranger);
+        _routerSwapExactOut(stranger, true, 1e18);
+
+        uint256 paid = in0 - _token(currency0).balanceOf(stranger);
+        uint256 fee = hook.pot(id, currency0);
+        assertEq(
+            _token(currency1).balanceOf(stranger) - out1, 1e18, "the swapper did not receive the output they named"
+        );
         assertGt(fee, 0, "no hook fee was taken");
-        assertEq(fee, (received + fee) * HOOK_FEE / PIPS, "hook fee is not 0.05% of the pool's output");
-        assertEq(_claims(currency1), fee, "the pot is not backed one for one by claims");
-        assertEq(hook.pot(id, currency0), 0, "the input currency's pot moved");
+        assertEq(fee, (paid - fee) * HOOK_FEE / PIPS, "hook fee is not 0.05% of what the pool charged");
+        assertEq(_claims(currency0), fee, "the pot is not backed one for one by claims");
+        assertEq(hook.pot(id, currency1), 0, "the output currency's pot moved");
+    }
+
+    /// @dev What taking the fee before the swap costs: it is charged on the amount requested. This
+    ///      swap asks for 1e18 and stops at a price limit one tick away, having used far less.
+    function test_ExactInputSwap_ThatStopsAtItsPriceLimit_PaidTheHookFeeOnAllItRequested() public {
+        BalanceDelta delta = _swap(key, true, 1e18, TickMath.getSqrtPriceAtTick(-1));
+
+        uint256 fee = 1e18 * uint256(HOOK_FEE) / PIPS;
+        uint256 paid = uint256(uint128(-delta.amount0()));
+        assertLt(paid, 1e17, "the swap did not stop early");
+        assertEq(hook.pot(id, currency0), fee, "hook fee is not 0.05% of the amount requested");
+        assertGt(paid, fee, "the swapper paid less than the hook fee");
     }
 
     // ── 5. the bonus ─────────────────────────────────────────────────────────────────────────
@@ -431,29 +463,36 @@ contract ReverseV4HookTest is HookTestBase {
         hook.claim(currency0);
     }
 
-    /// @dev A large swap one way, a small one back: currency0's pot holds something, but less than
-    ///      the bonus on the currency0 fees. The member is credited all of it and no more, and the
-    ///      collection goes through.
+    /// @dev A swap of under 2000 wei pays no hook fee (0.05% of it rounds down to nothing) but still
+    ///      pays LP fees. Enough of them leave fees to collect and an empty pot.
+    function _dustSwaps(uint256 count) internal {
+        for (uint256 i = 0; i < count; i++) {
+            _routerSwap(stranger, true, 1999);
+        }
+    }
+
+    function test_Collect_WhenThePotIsEmpty_GoesThrough_AndCreditsNothing() public {
+        _dustSwaps(100);
+
+        assertEq(hook.pot(id, currency0), 0, "currency0's pot is not empty");
+        (uint256 fees0,) = _collect(member, memberTokenId);
+        assertGt(_fullBonus(fees0), 0, "the fees collected are too small to earn any bonus");
+        assertEq(hook.owed(member, currency0), 0, "a bonus was credited out of an empty pot");
+    }
+
+    /// @dev The same, then one swap just large enough to put a few wei in the pot: less than the
+    ///      bonus on the fees. The member is credited all of it and no more.
     function test_Collect_WhenThePotIsShort_CreditsWhatIsThere() public {
-        _routerSwap(stranger, true, 1e18); // fees accrue in currency0; the hook fee lands in currency1
-        _routerSwap(stranger, false, 1e15); // a little hook fee lands in currency0
+        _dustSwaps(100);
+        _routerSwap(stranger, true, 4000);
 
         uint256 potBefore = hook.pot(id, currency0);
-        assertGt(potBefore, 0, "currency0's pot is empty");
+        assertEq(potBefore, 2, "0.05% of 4000 wei");
         (uint256 fees0,) = _collect(member, memberTokenId);
         assertLt(potBefore, _fullBonus(fees0), "the pot covers the full bonus, so it is not short");
 
         assertEq(hook.owed(member, currency0), potBefore, "member was not credited what the pot held");
         assertEq(hook.pot(id, currency0), 0, "the pot was not emptied");
-    }
-
-    function test_Collect_WhenThePotIsEmpty_GoesThrough_AndCreditsNothing() public {
-        _routerSwap(stranger, true, 1e18);
-
-        assertEq(hook.pot(id, currency0), 0, "currency0's pot is not empty");
-        (uint256 fees0,) = _collect(member, memberTokenId);
-        assertGt(fees0, 0, "no fees accrued in currency0");
-        assertEq(hook.owed(member, currency0), 0, "a bonus was credited out of an empty pot");
     }
 
     /// @dev The PositionManager burns the token before it removes the liquidity, so the position has
@@ -506,31 +545,36 @@ contract ReverseV4HookTest is HookTestBase {
     }
 
     /// @dev A credential holder who is the only LP trades with themselves, as a non-holder so the LP
-    ///      fee that comes back is the largest possible, then collects and takes the bonus. The swaps
-    ///      must have put into the pot at least what the bonus took out. The two currencies are summed
-    ///      as equals: the pool stays within 120 ticks of price 1 (1.2%), and the bound leaves 10%.
-    function testFuzz_TradingWithYourself_LeavesThePotNoSmaller(uint256 amount) public {
+    ///      fee that comes back is the largest possible, then collects and takes the bonus. In each
+    ///      currency, the swaps must have put into the pot at least what the bonus took out.
+    function testFuzz_TradingWithYourself_LeavesNeitherPotSmaller(uint256 amount, bool exactOutput) public {
         amount = bound(amount, 1e12, 1e17);
 
-        // Others' swaps fill the pot first, or there would be nothing to take.
+        // Others' swaps fill the pots first, or there would be nothing to take.
         _routerSwap(stranger, true, 1e17);
         _routerSwap(stranger, false, 1e17);
         _burn(stranger, strangerTokenId); // the member is now the only LP
         _collect(member, memberTokenId);
-        uint256 potBefore = hook.pot(id, currency0) + hook.pot(id, currency1);
+        uint256 pot0 = hook.pot(id, currency0);
+        uint256 pot1 = hook.pot(id, currency1);
         uint256 owedBefore = hook.owed(member, currency0) + hook.owed(member, currency1);
 
         address alias_ = makeAddr("member's second wallet");
         _fund(alias_);
-        _routerSwap(alias_, true, amount);
-        _routerSwap(alias_, false, amount);
+        if (exactOutput) {
+            _routerSwapExactOut(alias_, true, amount);
+            _routerSwapExactOut(alias_, false, amount);
+        } else {
+            _routerSwap(alias_, true, amount);
+            _routerSwap(alias_, false, amount);
+        }
         _collect(member, memberTokenId);
 
-        uint256 potAfter = hook.pot(id, currency0) + hook.pot(id, currency1);
         uint256 taken = hook.owed(member, currency0) + hook.owed(member, currency1) - owedBefore;
         assertGt(taken, 0, "no bonus was credited, so the test proves nothing");
-        // potAfter = potBefore + what the swaps paid in - taken, so this says: paid in >= taken.
-        assertGe(potAfter, potBefore, "trading with yourself shrank the pot");
+        // pot after = pot before + what the swaps paid in - what the bonus took, per currency.
+        assertGe(hook.pot(id, currency0), pot0, "trading with yourself shrank currency0's pot");
+        assertGe(hook.pot(id, currency1), pot1, "trading with yourself shrank currency1's pot");
     }
 
     // ── 7. the bonus rule on its own ─────────────────────────────────────────────────────────
@@ -576,18 +620,20 @@ contract ReverseV4HookTest is HookTestBase {
 
     // ── 9. fuzz: the hook never owes more than it holds ──────────────────────────────────────
 
-    /// @dev Any mix of swaps by either wallet in either direction, fee collections by either LP, and
-    ///      claims. After every step, for each currency: the claims the hook holds equal the pot plus
+    /// @dev Any mix of exact-input and exact-output swaps by either wallet in either direction, fee
+    ///      collections by either LP, and claims. After every step, for each currency: the claims the hook holds equal the pot plus
     ///      everything owed. So what has been credited can always be paid.
     function testFuzz_ClaimsHeld_AlwaysEqualPotPlusOwed(uint256 seed, uint8 steps) public {
         uint256 n = bound(steps, 1, 8);
         for (uint256 i = 0; i < n; i++) {
             uint256 r = uint256(keccak256(abi.encode(seed, i)));
-            uint256 action = r % 4;
+            uint256 action = r % 5;
             address who = (r >> 8) % 2 == 0 ? member : stranger;
 
             if (action < 2) {
                 _routerSwap(who, action == 0, bound(r >> 16, 1, 1e17));
+            } else if (action == 4) {
+                _routerSwapExactOut(who, (r >> 12) % 2 == 0, bound(r >> 16, 1, 1e17));
             } else if (action == 2) {
                 _collect(who, who == member ? memberTokenId : strangerTokenId);
             } else {

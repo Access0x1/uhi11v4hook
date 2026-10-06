@@ -13,7 +13,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 ///      the manifest is compared against what the hook itself declares.
 contract ContextManifestTest is HookTestBase {
     uint160 internal constant COUNTER_MASK = 0x8C0;
-    uint160 internal constant REVERSE_V4_HOOK_MASK = 0x25E4;
+    uint160 internal constant REVERSE_V4_HOOK_MASK = 0x25EC;
 
     function setUp() public {
         _deployV4();

@@ -1,12 +1,12 @@
 {
   "schemaVersion": "0",
   "name": "ReverseV4Hook",
-  "description": "For dynamic-fee pools. beforeSwap sets the LP fee: a lower fee for a swapper who holds a credential and came through one named router, the base fee otherwise. afterSwap takes a hook fee from the unspecified amount into a per-pool pot held as ERC-6909 claims. When a credential holder's PositionManager position collects LP fees, the hook credits a bonus on those fees out of the pot; the holder withdraws it with claim. Donations revert. No owner, no upgrade path.",
+  "description": "For dynamic-fee pools. beforeSwap sets the LP fee: lower for a swapper who holds a credential and came through one named router, the base fee otherwise. Every swap pays a hook fee on its input into a per-pool pot held as ERC-6909 claims. When a credential holder's PositionManager position collects LP fees, the hook credits a bonus on those fees out of the pot; the holder withdraws it with claim. Donations revert. No owner, no upgrade path.",
   "status": "tested",
   "source": {
     "path": "src/ReverseV4Hook.sol",
     "contract": "ReverseV4Hook",
-    "gitBlob": "d9b7706838e6feeb7465a62e8e93c6ba184463fa",
+    "gitBlob": "4df1b57aa001f4c377c023e817d6ca756def072f",
     "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
   },
   "compiler": {
@@ -16,7 +16,7 @@
     "optimizer": false
   },
   "permissions": {
-    "mask": "0x25E4",
+    "mask": "0x25EC",
     "callbacks": [
       "beforeInitialize",
       "afterAddLiquidity",
@@ -39,7 +39,7 @@
       "afterSwap": true,
       "beforeDonate": true,
       "afterDonate": false,
-      "beforeSwapReturnsDelta": false,
+      "beforeSwapReturnsDelta": true,
       "afterSwapReturnsDelta": true,
       "afterAddLiquidityReturnsDelta": false,
       "afterRemoveLiquidityReturnsDelta": false
@@ -57,7 +57,7 @@
     "needsHookData": false,
     "reasons": [
       "Dynamic fee: beforeSwap returns a fee override on every swap.",
-      "afterSwapReturnsDelta: the hook fee changes the swapper's unspecified amount.",
+      "beforeSwapReturnsDelta and afterSwapReturnsDelta: the hook fee changes what the swapper pays.",
       "Swaps and liquidity changes work with empty hookData; the hook never reads it.",
       "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
     ]
@@ -195,7 +195,7 @@
   "transientStorage": [],
   "math": [
     {
-      "expression": "hook fee = |unspecified amount| * hookFee / 1e6",
+      "expression": "hook fee = input * hookFee / 1e6. Exact-input: input is the amount requested. Exact-output: input is what the pool charged.",
       "format": "pips, 1e6 = 100%",
       "rounding": "down, in the swapper's favour"
     },
@@ -213,15 +213,15 @@
   "deltas": [
     {
       "callback": "beforeSwap",
-      "returns": "BeforeSwapDelta 0, LP fee with the override flag",
-      "currency": "none",
-      "settledBy": "Nobody. The address has no beforeSwapReturnDelta bit."
+      "returns": "BeforeSwapDelta (hook fee, 0) on an exact-input swap, (0, 0) otherwise; LP fee with the override flag",
+      "currency": "specified currency, which is the input of an exact-input swap",
+      "settledBy": "The hook, in the same callback, by minting itself ERC-6909 claims for that amount. The pool swaps the requested amount less the fee."
     },
     {
       "callback": "afterSwap",
-      "returns": "int128 hook fee, positive",
-      "currency": "unspecified currency of the swap",
-      "settledBy": "The hook, in the same callback, by minting itself ERC-6909 claims for that amount. The swapper's router pays or receives the difference."
+      "returns": "int128 hook fee on an exact-output swap, 0 otherwise",
+      "currency": "unspecified currency, which is the input of an exact-output swap",
+      "settledBy": "The hook, in the same callback, by minting itself ERC-6909 claims for that amount. The swapper's router pays it on top of what the pool charged."
     },
     {
       "callback": "afterAddLiquidity, afterRemoveLiquidity",
@@ -273,11 +273,12 @@
   "securityAssumptions": [
     "The credential registry answers honestly. Whoever can grant a credential can grant the lower fee and the bonus.",
     "The named swap router reports its real caller from msgSender().",
-    "The named PositionManager sets a position's salt to its token id and its ownerOf names the holder.",
-    "The pool trades near enough to parity in value that hookFee of the unspecified amount is worth at least bonusRate of the LP fee on the same swap. The constructor checks the rates, not prices."
+    "The named PositionManager sets a position's salt to its token id and its ownerOf names the holder."
   ],
   "doesNotGuarantee": [
-    "Does not guarantee a bonus. It is paid from the pot of the same currency as the fees, and the pot is filled in the swap's other currency; with one-way flow the pot for the fee currency can be empty.",
+    "Does not charge the hook fee on what an exact-input swap actually used. It is taken before the swap, on the amount requested, so a swap that stops at its price limit has paid the fee on all of it. A requested amount whose fee does not fit an int128 reverts.",
+    "Does not pay out everything in the pot. The pot takes in more than bonuses can use (positions without the credential earn none, and the rates leave a margin), and nothing else can withdraw it: the surplus stays in the hook.",
+    "Does not guarantee the full bonus. Swaps under 1e6 / hookFee wei pay LP fees but no hook fee; a pot short for that reason pays what it holds.",
     "Does not pay a bonus on fees still uncollected when a position is burned: the PositionManager burns the token first, so there is no owner to credit.",
     "Does not pay a bonus to positions held through any contract other than the named PositionManager, or give the member fee through any router other than the named one.",
     "Does not tie the bonus to how long the credential was held: it is checked when fees are collected, so a position can be transferred to a holder before collecting.",
@@ -287,11 +288,11 @@
   ],
   "invariants": [
     {
-      "statement": "The hook's address carries exactly the seven flags it declares, mask 0x25E4.",
+      "statement": "The hook's address carries exactly the eight flags it declares, mask 0x25EC.",
       "test": "test_Address_MatchesDeclaredPermissions"
     },
     {
-      "statement": "The constructor rejects an address missing one of the seven bits.",
+      "statement": "The constructor rejects an address missing one of the eight bits.",
       "test": "test_RevertWhen_PlacedAtAddressMissingOneFlag"
     },
     {
@@ -301,6 +302,18 @@
     {
       "statement": "A swap is charged memberFee only for a credential holder who came through the named router; otherwise baseFee. Read from the PoolManager's Swap event.",
       "test": "test_Swap_StrangerPaysBaseFee_MemberPaysMemberFee"
+    },
+    {
+      "statement": "An exact-input swap pays hookFee of its input into the input currency's pot, and the swapper pays exactly what they asked to.",
+      "test": "test_ExactInputSwap_PaysTheHookFeeOnItsInput_IntoThePot_AsClaims"
+    },
+    {
+      "statement": "An exact-output swap pays hookFee of what the pool charged, on top, into the input currency's pot.",
+      "test": "test_ExactOutputSwap_PaysTheHookFeeOnItsInput_OnTop"
+    },
+    {
+      "statement": "An exact-input swap that stops at its price limit has paid the hook fee on the amount requested.",
+      "test": "test_ExactInputSwap_ThatStopsAtItsPriceLimit_PaidTheHookFeeOnAllItRequested"
     },
     {
       "statement": "A second copy of the same router is not believed.",
@@ -319,8 +332,8 @@
       "test": "testFuzz_BonusRule_NeverExceedsThePot_AndIsFullWhenThePotAllows"
     },
     {
-      "statement": "An LP who swaps against their own position puts into the pot at least what their bonus takes out.",
-      "test": "testFuzz_TradingWithYourself_LeavesThePotNoSmaller"
+      "statement": "An LP who swaps against their own position puts into each currency's pot at least what their bonus takes out of it.",
+      "test": "testFuzz_TradingWithYourself_LeavesNeitherPotSmaller"
     },
     {
       "statement": "When the pot holds less than the full bonus, the member is credited exactly what it holds.",
