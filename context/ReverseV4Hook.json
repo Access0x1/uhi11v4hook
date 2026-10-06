@@ -1,13 +1,13 @@
 {
   "schemaVersion": "0",
   "name": "ReverseV4Hook",
-  "description": "For dynamic-fee pools. beforeSwap sets the LP fee: lower for a swapper who holds a credential and came through one named router, the base fee otherwise. Every swap pays a hook fee on its input into a per-pool pot held as ERC-6909 claims. When a credential holder's PositionManager position collects LP fees, the hook credits a bonus on those fees out of the pot; the holder withdraws it with claim. Donations revert. No owner, no upgrade path.",
+  "description": "For dynamic-fee pools. beforeSwap sets the LP fee: lower for a swapper who holds a credential and came through one named router, the base fee otherwise. Every swap pays a hook fee on its input into a per-pool pot held as ERC-6909 claims. A credential holder's PositionManager position is credited a bonus on the LP fees it collects, out of the pot, and withdraws it with claim. A fixed treasury may sweep a fixed share of the hook fees. Donations revert. No owner, no upgrade path.",
   "status": "tested",
   "source": {
     "path": "src/ReverseV4Hook.sol",
     "contract": "ReverseV4Hook",
-    "gitBlob": "4df1b57aa001f4c377c023e817d6ca756def072f",
-    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+    "gitBlob": "b2a1dd9fe84df52d615451fc11b18f83448911be",
+    "inherits": "This repository's HookFeePotTemplate, FeesCollectedTemplate, SwapperIdentity and FeeOverride, over OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
   },
   "compiler": {
     "solc": "0.8.30",
@@ -73,8 +73,9 @@
       "type": "mapping(PoolId => mapping(Currency => uint256))",
       "kind": "storage",
       "writtenBy": [
-        "afterSwap (adds the hook fee)",
-        "afterAddLiquidity, afterRemoveLiquidity (subtract a credited bonus)"
+        "beforeSwap, afterSwap (add the hook fee)",
+        "afterAddLiquidity, afterRemoveLiquidity (subtract a credited bonus)",
+        "sweep (subtracts what the treasury is paid)"
       ],
       "readBy": [
         "anyone, through the public getter"
@@ -137,17 +138,6 @@
       ]
     },
     {
-      "name": "swapRouter",
-      "type": "address",
-      "kind": "immutable",
-      "writtenBy": [
-        "constructor"
-      ],
-      "readBy": [
-        "beforeSwap"
-      ]
-    },
-    {
       "name": "baseFee",
       "type": "uint24",
       "kind": "immutable",
@@ -190,6 +180,64 @@
       "readBy": [
         "afterAddLiquidity, afterRemoveLiquidity"
       ]
+    },
+    {
+      "name": "feesTaken",
+      "type": "mapping(PoolId => mapping(Currency => uint256))",
+      "kind": "storage",
+      "writtenBy": [
+        "beforeSwap, afterSwap (add the hook fee); never reduced"
+      ],
+      "readBy": [
+        "anyone, through the public getter",
+        "sweep"
+      ]
+    },
+    {
+      "name": "swept",
+      "type": "mapping(PoolId => mapping(Currency => uint256))",
+      "kind": "storage",
+      "writtenBy": [
+        "sweep; never reduced"
+      ],
+      "readBy": [
+        "anyone, through the public getter",
+        "sweep"
+      ]
+    },
+    {
+      "name": "trustedRouter",
+      "type": "mapping(address => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "constructor only: one router"
+      ],
+      "readBy": [
+        "anyone, through the public getter",
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "treasury",
+      "type": "address",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "sweep"
+      ]
+    },
+    {
+      "name": "treasuryShare",
+      "type": "uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "sweep"
+      ]
     }
   ],
   "transientStorage": [],
@@ -208,6 +256,11 @@
       "expression": "constructor requires bonusRate * baseFee <= hookFee * 1e6",
       "format": "pips",
       "rounding": "none; integer comparison"
+    },
+    {
+      "expression": "sweepable = min(pot, feesTaken * treasuryShare / 1e6 - swept)",
+      "format": "pips, 1e6 = 100%",
+      "rounding": "down, against the treasury"
     }
   ],
   "deltas": [
@@ -230,17 +283,17 @@
       "settledBy": "Nobody. The bonus is a ledger entry; it moves no currency until claim."
     },
     {
-      "callback": "unlockCallback (from claim)",
+      "callback": "unlockCallback (from claim and from sweep)",
       "returns": "none",
-      "currency": "the claimed currency",
-      "settledBy": "The hook burns its claims and takes the same amount to the claimer; the two cancel."
+      "currency": "the currency paid out",
+      "settledBy": "The hook burns its claims and takes the same amount to the claimer or the treasury; the two cancel."
     }
   ],
   "externalCalls": [
     {
-      "target": "swapRouter",
+      "target": "the one trusted router",
       "function": "msgSender()",
-      "why": "Immutable, set at deployment. Only this address is asked who the swapper is. In try/catch."
+      "why": "Set at deployment and never changed. Only this address is asked who the swapper is. In try/catch."
     },
     {
       "target": "credential",
@@ -268,16 +321,23 @@
       "function": "claim",
       "caller": "anyone, for their own balance only",
       "enforcedBy": "reads owed[msg.sender]; reverts NothingToClaim at zero"
+    },
+    {
+      "function": "sweep",
+      "caller": "anyone; it pays only the immutable treasury",
+      "enforcedBy": "the amount is capped by sweepable(); reverts NothingToSweep at zero"
     }
   ],
   "securityAssumptions": [
     "The credential registry answers honestly. Whoever can grant a credential can grant the lower fee and the bonus.",
     "The named swap router reports its real caller from msgSender().",
-    "The named PositionManager sets a position's salt to its token id and its ownerOf names the holder."
+    "The named PositionManager sets a position's salt to its token id and its ownerOf names the holder.",
+    "The treasury address can receive the currencies swept. If it cannot, only sweep fails."
   ],
   "doesNotGuarantee": [
     "Does not charge the hook fee on what an exact-input swap actually used. It is taken before the swap, on the amount requested, so a swap that stops at its price limit has paid the fee on all of it. A requested amount whose fee does not fit an int128 reverts.",
-    "Does not pay out everything in the pot. The pot takes in more than bonuses can use (positions without the credential earn none, and the rates leave a margin), and nothing else can withdraw it: the surplus stays in the hook.",
+    "Does not guarantee the treasury's share leaves enough for every bonus. The treasury may take up to treasuryShare of all hook fees; bonuses can need up to bonusRate * baseFee / hookFee of them when every position holds the credential. If the two shares add up to more than 100%, whichever comes first is paid and the other is short.",
+    "Does not pay out what neither bonuses nor the treasury's share use; that remainder stays in the hook.",
     "Does not guarantee the full bonus. Swaps under 1e6 / hookFee wei pay LP fees but no hook fee; a pot short for that reason pays what it holds.",
     "Does not pay a bonus on fees still uncollected when a position is burned: the PositionManager burns the token first, so there is no owner to credit.",
     "Does not pay a bonus to positions held through any contract other than the named PositionManager, or give the member fee through any router other than the named one.",
@@ -296,7 +356,7 @@
       "test": "test_RevertWhen_PlacedAtAddressMissingOneFlag"
     },
     {
-      "statement": "After any mix of swaps, fee collections and claims, the claims the hook holds in each currency equal the pot plus everything owed.",
+      "statement": "After any mix of swaps, fee collections, claims and sweeps, the claims the hook holds in each currency equal the pot plus everything owed, and the treasury has never been paid more than treasuryShare of the hook fees taken.",
       "test": "testFuzz_ClaimsHeld_AlwaysEqualPotPlusOwed"
     },
     {
@@ -350,6 +410,14 @@
     {
       "statement": "No caller other than the PoolManager can run a callback or the unlock callback.",
       "test": "testFuzz_RevertWhen_CallerIsNotPoolManager"
+    },
+    {
+      "statement": "A sweep, called by anyone, pays only the treasury, exactly its share, and a second sweep has nothing to take.",
+      "test": "test_Sweep_ByAnyone_PaysTheTreasuryItsShareOfTheHookFees_Once"
+    },
+    {
+      "statement": "A sweep cannot reach what has been credited to an LP.",
+      "test": "test_Sweep_NeverReachesWhatIsOwed"
     }
   ],
   "deployments": [],

@@ -2,27 +2,20 @@
 pragma solidity 0.8.30;
 
 import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
-import {CurrencySettler} from "@openzeppelin/uniswap-hooks/src/utils/CurrencySettler.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
-import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {IMsgSender} from "@uniswap/v4-periphery/src/interfaces/IMsgSender.sol";
 
 import {ICredential} from "./interfaces/ICredential.sol";
-
-/// @dev The one function this hook needs from the PositionManager's ERC-721.
-interface IPositionOwner {
-    function ownerOf(uint256 tokenId) external view returns (address);
-}
+import {HookFeePotTemplate} from "./templates/HookFeePotTemplate.sol";
+import {FeesCollectedTemplate} from "./templates/FeesCollectedTemplate.sol";
+import {SwapperIdentity} from "./templates/SwapperIdentity.sol";
+import {FeeOverride} from "./templates/FeeOverride.sol";
 
 /// @title ReverseV4Hook
 /// @notice A loyalty hook with its own accounting, for dynamic-fee pools.
@@ -30,55 +23,49 @@ interface IPositionOwner {
 ///         2. Every swap also pays `hookFee` on its input into a per-pool pot the hook holds.
 ///         3. When a credential holder's position collects LP fees, the hook credits that holder a bonus of
 ///            `bonusRate` on the fees collected, out of the pot. The holder withdraws it with `claim`.
-/// @dev Eight flags, so eight bits in the address:
-///      beforeInitialize 0x2000 | afterAddLiquidity 0x400 | afterRemoveLiquidity 0x100 | beforeSwap 0x80
-///      | afterSwap 0x40 | beforeDonate 0x20 | beforeSwapReturnDelta 0x08 | afterSwapReturnDelta 0x04 = 0x25EC.
-///      LP fees are paid in a swap's input currency. The hook fee is taken in that same currency, so
-///      the pot that pays a bonus on those LP fees is filled by the very swaps that produced them.
+///         4. A treasury set at deployment may take up to `treasuryShare` of the hook fees, through `sweep`.
+/// @dev Built from this repository's templates, and its mask is theirs combined:
+///        HookFeePotTemplate    0xCC    beforeSwap, afterSwap and both swap returns-delta flags
+///        FeesCollectedTemplate 0x500   afterAddLiquidity, afterRemoveLiquidity
+///        this contract         0x2020  beforeInitialize (dynamic-fee pools only), beforeDonate (refused)
+///      0xCC | 0x500 | 0x2020 = 0x25EC. SwapperIdentity and FeeOverride own no callback.
 ///      No owner, no upgrade path, every parameter immutable.
-contract ReverseV4Hook is BaseHook, IUnlockCallback {
-    using LPFeeLibrary for uint24;
-    using CurrencySettler for Currency;
-    using SafeCast for uint256;
-
-    /// @dev Fees and rates are in pips: 1e6 = 100%.
-    uint256 internal constant PIPS = 1e6;
-
+contract ReverseV4Hook is HookFeePotTemplate, FeesCollectedTemplate, SwapperIdentity, FeeOverride {
     /// @notice The registry asked whether an account holds the credential.
     ICredential public immutable credential;
     /// @notice The kind of credential that earns the member fee and the bonus.
     bytes32 public immutable credentialId;
-    /// @notice The only liquidity caller whose positions can earn a bonus. Its ERC-721 names the position's owner.
-    address public immutable positionManager;
-    /// @notice The only swap caller whose `msgSender()` is believed.
-    address public immutable swapRouter;
 
-    /// @notice LP fee for a swapper without the credential, or one who came through any other router.
-    uint24 public immutable baseFee;
-    /// @notice LP fee for a credential holder who came through `swapRouter`.
+    /// @notice LP fee for a credential holder who came through the trusted router.
     uint24 public immutable memberFee;
-    /// @notice Taken from every swap's input, into the pot.
-    uint24 public immutable hookFee;
     /// @notice Bonus on LP fees collected by a credential holder's position, paid out of the pot.
     uint24 public immutable bonusRate;
 
-    /// @notice Hook fees taken on a pool and not yet credited to anyone, per currency.
-    mapping(PoolId => mapping(Currency => uint256)) public pot;
     /// @notice Bonus credited to an account and not yet claimed, per currency.
     mapping(address => mapping(Currency => uint256)) public owed;
 
-    event HookFeeTaken(PoolId indexed id, Currency indexed currency, uint256 amount);
     event BonusCredited(PoolId indexed id, address indexed account, Currency indexed currency, uint256 amount);
     event Claimed(address indexed account, Currency indexed currency, uint256 amount);
 
-    error NotAContract(address target);
-    error FeeTooLarge(uint24 fee);
     error MemberFeeAboveBaseFee();
     /// @dev bonusRate * baseFee must not exceed hookFee * 1e6. See the constructor.
     error BonusNotCoveredByHookFee();
-    error PoolFeeNotDynamic();
     error DonationsNotAccepted();
     error NothingToClaim();
+
+    /// @dev Everything the hook is deployed with. A struct, so the constructor fits the compiler's stack.
+    struct Config {
+        ICredential credential;
+        bytes32 credentialId;
+        address positionManager;
+        address swapRouter;
+        uint24 baseFee;
+        uint24 memberFee;
+        uint24 hookFee;
+        uint24 bonusRate;
+        address treasury;
+        uint24 treasuryShare;
+    }
 
     /// @dev BaseHook's constructor checks this contract's own address against getHookPermissions()
     ///      and reverts with HookAddressNotValid if the low 14 bits disagree.
@@ -88,41 +75,37 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
     ///      input, and with it a bonus of bonusRate on that fee. The same swap pays hookFee of the input
     ///      into the pot, in the same currency. While bonusRate * baseFee <= hookFee * 1e6, the swap puts
     ///      in at least what the bonus takes out.
-    constructor(
-        IPoolManager poolManager_,
-        ICredential credential_,
-        bytes32 credentialId_,
-        address positionManager_,
-        address swapRouter_,
-        uint24 baseFee_,
-        uint24 memberFee_,
-        uint24 hookFee_,
-        uint24 bonusRate_
-    ) BaseHook(poolManager_) {
+    constructor(IPoolManager poolManager_, Config memory c)
+        BaseHook(poolManager_)
+        HookFeePotTemplate(c.hookFee, c.treasury, c.treasuryShare)
+        FeesCollectedTemplate(c.positionManager)
+        SwapperIdentity(_only(c.swapRouter))
+        FeeOverride(c.baseFee)
+    {
         // A try/catch around a call to an address without code still reverts, which would stop
-        // every swap or every fee collection on the pool.
-        if (address(credential_).code.length == 0) revert NotAContract(address(credential_));
-        if (positionManager_.code.length == 0) revert NotAContract(positionManager_);
-        if (swapRouter_.code.length == 0) revert NotAContract(swapRouter_);
+        // every swap on the pool.
+        if (address(c.credential).code.length == 0) revert NotAContract(address(c.credential));
+        if (c.memberFee > c.baseFee) revert MemberFeeAboveBaseFee();
+        if (uint256(c.bonusRate) * c.baseFee > uint256(c.hookFee) * PIPS) revert BonusNotCoveredByHookFee();
 
-        // At 100% an exact-output swap cannot execute (Pool.sol, InvalidFeeForExactOut).
-        if (baseFee_ >= PIPS) revert FeeTooLarge(baseFee_);
-        if (hookFee_ >= PIPS) revert FeeTooLarge(hookFee_);
-        if (memberFee_ > baseFee_) revert MemberFeeAboveBaseFee();
-        if (uint256(bonusRate_) * baseFee_ > uint256(hookFee_) * PIPS) revert BonusNotCoveredByHookFee();
-
-        credential = credential_;
-        credentialId = credentialId_;
-        positionManager = positionManager_;
-        swapRouter = swapRouter_;
-        baseFee = baseFee_;
-        memberFee = memberFee_;
-        hookFee = hookFee_;
-        bonusRate = bonusRate_;
+        credential = c.credential;
+        credentialId = c.credentialId;
+        memberFee = c.memberFee;
+        bonusRate = c.bonusRate;
     }
 
-    /// @notice The callbacks this hook implements. Every flag set here has a function below.
-    function getHookPermissions() public pure override returns (Hooks.Permissions memory permissions) {
+    function _only(address router) private pure returns (address[] memory routers) {
+        routers = new address[](1);
+        routers[0] = router;
+    }
+
+    /// @notice The callbacks this hook implements: the two templates' and its own two.
+    function getHookPermissions()
+        public
+        pure
+        override(HookFeePotTemplate, FeesCollectedTemplate)
+        returns (Hooks.Permissions memory permissions)
+    {
         permissions.beforeInitialize = true;
         permissions.afterAddLiquidity = true;
         permissions.afterRemoveLiquidity = true;
@@ -133,12 +116,55 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
         permissions.afterSwapReturnDelta = true;
     }
 
+    // ── wiring: which template answers which callback ────────────────────────────────────────
+    //
+    // Both templates descend from BaseHook, so each callback one of them implements has to be
+    // pointed at that template by name. Nothing else happens in these four functions.
+
+    function _beforeSwap(address sender, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
+        internal
+        override(BaseHook, HookFeePotTemplate)
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        return HookFeePotTemplate._beforeSwap(sender, key, params, hookData);
+    }
+
+    function _afterSwap(
+        address sender,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata hookData
+    ) internal override(BaseHook, HookFeePotTemplate) returns (bytes4, int128) {
+        return HookFeePotTemplate._afterSwap(sender, key, params, delta, hookData);
+    }
+
+    function _afterAddLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta delta,
+        BalanceDelta feesAccrued,
+        bytes calldata hookData
+    ) internal override(BaseHook, FeesCollectedTemplate) returns (bytes4, BalanceDelta) {
+        return FeesCollectedTemplate._afterAddLiquidity(sender, key, params, delta, feesAccrued, hookData);
+    }
+
+    function _afterRemoveLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta delta,
+        BalanceDelta feesAccrued,
+        bytes calldata hookData
+    ) internal override(BaseHook, FeesCollectedTemplate) returns (bytes4, BalanceDelta) {
+        return FeesCollectedTemplate._afterRemoveLiquidity(sender, key, params, delta, feesAccrued, hookData);
+    }
+
     // ── the pool ─────────────────────────────────────────────────────────────────────────────
 
-    /// @dev A fee override is honoured only on a dynamic-fee pool (Hooks.sol, beforeSwap). On a
-    ///      static-fee pool the member fee would be ignored without any error, so such a pool is refused.
     function _beforeInitialize(address, PoolKey calldata key, uint160) internal pure override returns (bytes4) {
-        if (!key.fee.isDynamicFee()) revert PoolFeeNotDynamic();
+        _requireDynamicFee(key);
         return this.beforeInitialize.selector;
     }
 
@@ -153,125 +179,34 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
         revert DonationsNotAccepted();
     }
 
-    // ── swaps ────────────────────────────────────────────────────────────────────────────────
+    // ── the LP fee ───────────────────────────────────────────────────────────────────────────
 
-    /// @dev Returns the LP fee for this swap, always with the override flag: a dynamic-fee pool starts
-    ///      at fee 0 (LPFeeLibrary.getInitialLPFee), so a swap without an override would be free.
-    ///      `sender` is the router, never the person. Only `swapRouter` is asked who called it.
-    ///
-    ///      For an exact-input swap the input is the specified currency, and this is the only callback
-    ///      that can change the specified amount. The hook fee is taken here, on the amount REQUESTED:
-    ///      the pool then swaps the rest. A swap that stops early at its price limit has still paid the
-    ///      fee on everything it asked to swap.
-    function _beforeSwap(address sender, PoolKey calldata key, SwapParams calldata params, bytes calldata)
+    /// @dev The fee pot's beforeSwap asks this for the swap's LP fee.
+    function _lpFeeOverride(address sender, PoolKey calldata, SwapParams calldata)
         internal
+        view
         override
-        returns (bytes4, BeforeSwapDelta, uint24)
+        returns (uint24)
     {
-        uint24 fee = baseFee;
-        if (sender == swapRouter) {
-            try IMsgSender(sender).msgSender() returns (address swapper) {
-                if (_holdsCredential(swapper)) fee = memberFee;
-            } catch {}
-        }
-
-        int128 taken;
-        if (params.amountSpecified < 0) {
-            uint256 feeAmount = FullMath.mulDiv(uint256(-params.amountSpecified), hookFee, PIPS);
-            taken = _toPot(key, params.zeroForOne ? key.currency0 : key.currency1, feeAmount);
-        }
-        return (this.beforeSwap.selector, toBeforeSwapDelta(taken, 0), fee | LPFeeLibrary.OVERRIDE_FEE_FLAG);
+        return _asOverride(_holdsCredential(_swapperOf(sender)) ? memberFee : baseFee);
     }
 
-    /// @dev For an exact-output swap the input is the unspecified currency, known only now. The hook
-    ///      fee is taken on what the pool charged, and the swapper pays it on top. An exact-input swap
-    ///      paid in beforeSwap and is left alone here.
-    function _afterSwap(address, PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata)
-        internal
-        override
-        returns (bytes4, int128)
-    {
-        if (params.amountSpecified < 0) return (this.afterSwap.selector, 0);
+    // ── the bonus ────────────────────────────────────────────────────────────────────────────
 
-        (Currency input, int128 inputDelta) =
-            params.zeroForOne ? (key.currency0, delta.amount0()) : (key.currency1, delta.amount1());
-        // The swapper owes the input, so its delta is negative.
-        uint256 paid = inputDelta < 0 ? uint256(uint128(-inputDelta)) : 0;
-        return (this.afterSwap.selector, _toPot(key, input, FullMath.mulDiv(paid, hookFee, PIPS)));
-    }
-
-    /// @dev Takes `feeAmount` of `currency` as ERC-6909 claims on the PoolManager and adds it to the
-    ///      pool's pot. The value returned goes back to the PoolManager as the hook's delta, which
-    ///      charges the swapper and cancels the claims minted here. Fees round down, in the swapper's favour.
-    function _toPot(PoolKey calldata key, Currency currency, uint256 feeAmount) internal returns (int128) {
-        if (feeAmount == 0) return 0;
-
-        currency.take(poolManager, address(this), feeAmount, true);
-        PoolId id = key.toId();
-        pot[id][currency] += feeAmount;
-        emit HookFeeTaken(id, currency, feeAmount);
-        return feeAmount.toInt128();
-    }
-
-    // ── liquidity ────────────────────────────────────────────────────────────────────────────
-
-    /// @dev `feesAccrued` is what the position earned in LP fees since it was last touched.
-    function _afterAddLiquidity(
-        address sender,
-        PoolKey calldata key,
-        ModifyLiquidityParams calldata params,
-        BalanceDelta,
-        BalanceDelta feesAccrued,
-        bytes calldata
-    ) internal override returns (bytes4, BalanceDelta) {
-        _creditBonus(sender, key, params.salt, feesAccrued);
-        return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
-    }
-
-    /// @dev Also runs for a change of zero liquidity, which is how fees are collected (Hooks.sol,
-    ///      afterModifyLiquidity sends every non-positive change here).
-    function _afterRemoveLiquidity(
-        address sender,
-        PoolKey calldata key,
-        ModifyLiquidityParams calldata params,
-        BalanceDelta,
-        BalanceDelta feesAccrued,
-        bytes calldata
-    ) internal override returns (bytes4, BalanceDelta) {
-        _creditBonus(sender, key, params.salt, feesAccrued);
-        return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
-    }
-
-    /// @dev Nothing in here may revert: it runs inside every deposit, withdrawal and fee collection.
-    ///      The position's owner in the PoolManager is the calling contract, not a person. Only the
-    ///      PositionManager is believed: it sets the salt to the position's token id, and its ERC-721
-    ///      names the owner. A position whose token is already burned has no owner and earns no bonus.
-    function _creditBonus(address sender, PoolKey calldata key, bytes32 salt, BalanceDelta feesAccrued) internal {
-        if (sender != positionManager) return;
-
-        int128 fees0 = feesAccrued.amount0();
-        int128 fees1 = feesAccrued.amount1();
-        if (fees0 <= 0 && fees1 <= 0) return;
-
-        address account;
-        try IPositionOwner(positionManager).ownerOf(uint256(salt)) returns (address positionOwner) {
-            account = positionOwner;
-        } catch {
-            return;
-        }
+    /// @dev Called when a position held through the PositionManager collects LP fees.
+    function _onFeesCollected(PoolKey calldata key, address account, uint256 fees0, uint256 fees1) internal override {
         if (!_holdsCredential(account)) return;
 
         PoolId id = key.toId();
-        if (fees0 > 0) _creditFromPot(id, key.currency0, account, uint256(uint128(fees0)));
-        if (fees1 > 0) _creditFromPot(id, key.currency1, account, uint256(uint128(fees1)));
+        if (fees0 != 0) _creditFromPot(id, key.currency0, account, fees0);
+        if (fees1 != 0) _creditFromPot(id, key.currency1, account, fees1);
     }
 
     function _creditFromPot(PoolId id, Currency currency, address account, uint256 fees) internal {
-        uint256 available = pot[id][currency];
-        uint256 amount = _bonus(fees, available);
+        uint256 amount = _bonus(fees, pot[id][currency]);
         if (amount == 0) return;
 
-        pot[id][currency] = available - amount;
+        _spendFromPot(id, currency, amount);
         owed[account][currency] += amount;
         emit BonusCredited(id, account, currency, amount);
     }
@@ -285,7 +220,9 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
     }
 
     /// @dev A registry that reverts counts as "no credential", so it cannot stop a swap or a withdrawal.
+    ///      Nobody (address(0), an unrecognised swapper) holds one.
     function _holdsCredential(address account) internal view returns (bool) {
+        if (account == address(0)) return false;
         try credential.hasValidCredential(account, credentialId) returns (bool held) {
             return held;
         } catch {
@@ -304,16 +241,6 @@ contract ReverseV4Hook is BaseHook, IUnlockCallback {
 
         owed[msg.sender][currency] = 0;
         emit Claimed(msg.sender, currency, amount);
-        poolManager.unlock(abi.encode(msg.sender, currency, amount));
-    }
-
-    /// @dev The PoolManager calls this back only on the contract that called `unlock`, so the data is
-    ///      always what `claim` encoded. Burns the hook's claims and takes the same amount of the
-    ///      currency to the claimer: the two deltas cancel.
-    function unlockCallback(bytes calldata data) external onlyPoolManager returns (bytes memory) {
-        (address to, Currency currency, uint256 amount) = abi.decode(data, (address, Currency, uint256));
-        currency.settle(poolManager, address(this), amount, true);
-        currency.take(poolManager, to, amount, false);
-        return "";
+        _payOut(msg.sender, currency, amount);
     }
 }

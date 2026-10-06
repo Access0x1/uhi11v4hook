@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {HookTestBase} from "./utils/HookTestBase.sol";
 import {Counter} from "../src/Counter.sol";
 import {ReverseV4Hook} from "../src/ReverseV4Hook.sol";
+import {ICredential} from "../src/interfaces/ICredential.sol";
 
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
@@ -31,15 +32,19 @@ contract ContextManifestTest is HookTestBase {
     function test_ReverseV4Hook_ManifestMatchesHook() public {
         address where = _flagAddress(REVERSE_V4_HOOK_MASK);
         address stand = address(manager);
-        _place(
-            abi.encodePacked(
-                type(ReverseV4Hook).creationCode,
-                abi.encode(
-                    manager, stand, bytes32(0), stand, stand, uint24(3000), uint24(500), uint24(500), uint24(150_000)
-                )
-            ),
-            where
-        );
+        ReverseV4Hook.Config memory config = ReverseV4Hook.Config({
+            credential: ICredential(stand),
+            credentialId: bytes32(0),
+            positionManager: stand,
+            swapRouter: stand,
+            baseFee: 3000,
+            memberFee: 500,
+            hookFee: 500,
+            bonusRate: 150_000,
+            treasury: stand,
+            treasuryShare: 500_000
+        });
+        _place(abi.encodePacked(type(ReverseV4Hook).creationCode, abi.encode(manager, config)), where);
 
         _assertManifestMatches("context/ReverseV4Hook.json", ReverseV4Hook(where).getHookPermissions());
     }

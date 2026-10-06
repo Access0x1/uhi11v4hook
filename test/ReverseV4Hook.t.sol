@@ -4,6 +4,8 @@ pragma solidity 0.8.30;
 import {HookTestBase} from "./utils/HookTestBase.sol";
 import {ReverseV4Hook} from "../src/ReverseV4Hook.sol";
 import {ICredential} from "../src/interfaces/ICredential.sol";
+import {FeeOverride} from "../src/templates/FeeOverride.sol";
+import {HookFeePotTemplate} from "../src/templates/HookFeePotTemplate.sol";
 
 import {Vm} from "forge-std/Vm.sol";
 import {Permit2Deployer} from "hookmate/artifacts/Permit2.sol";
@@ -61,29 +63,7 @@ contract SettableCredential is ICredential {
 
 /// @dev Test-only. Opens the internal bonus rule so it can be fuzzed on its own.
 contract BonusRuleHarness is ReverseV4Hook {
-    constructor(
-        IPoolManager poolManager_,
-        ICredential credential_,
-        bytes32 credentialId_,
-        address positionManager_,
-        address swapRouter_,
-        uint24 baseFee_,
-        uint24 memberFee_,
-        uint24 hookFee_,
-        uint24 bonusRate_
-    )
-        ReverseV4Hook(
-            poolManager_,
-            credential_,
-            credentialId_,
-            positionManager_,
-            swapRouter_,
-            baseFee_,
-            memberFee_,
-            hookFee_,
-            bonusRate_
-        )
-    {}
+    constructor(IPoolManager poolManager_, Config memory c) ReverseV4Hook(poolManager_, c) {}
 
     function bonusOf(uint256 fees, uint256 available) external view returns (uint256) {
         return _bonus(fees, available);
@@ -108,6 +88,7 @@ contract ReverseV4HookTest is HookTestBase {
     uint24 internal constant MEMBER_FEE = 500; // 0.05%
     uint24 internal constant HOOK_FEE = 500; // 0.05% of the input
     uint24 internal constant BONUS_RATE = 150_000; // 15% of LP fees collected; the bound allows 16.66%
+    uint24 internal constant TREASURY_SHARE = 500_000; // the treasury may sweep at most half of the hook fees
     uint256 internal constant PIPS = 1e6;
 
     bytes32 internal constant SWAP_TOPIC =
@@ -124,6 +105,7 @@ contract ReverseV4HookTest is HookTestBase {
 
     address internal member = makeAddr("member");
     address internal stranger = makeAddr("stranger");
+    address internal treasury = makeAddr("treasury");
     uint256 internal memberTokenId;
     uint256 internal strangerTokenId;
 
@@ -171,7 +153,19 @@ contract ReverseV4HookTest is HookTestBase {
         return abi.encodePacked(
             creationCode,
             abi.encode(
-                manager, registry, CREDENTIAL_ID, address(posm), address(router), baseFee, memberFee, hookFee, bonusRate
+                manager,
+                ReverseV4Hook.Config({
+                    credential: registry,
+                    credentialId: CREDENTIAL_ID,
+                    positionManager: address(posm),
+                    swapRouter: address(router),
+                    baseFee: baseFee,
+                    memberFee: memberFee,
+                    hookFee: hookFee,
+                    bonusRate: bonusRate,
+                    treasury: treasury,
+                    treasuryShare: TREASURY_SHARE
+                })
             )
         );
     }
@@ -318,7 +312,7 @@ contract ReverseV4HookTest is HookTestBase {
         } catch (bytes memory reason) {
             assertEq(bytes4(reason), CustomRevert.WrappedError.selector, "not the PoolManager's wrapped hook error");
             (,, bytes memory inner,) = abi.decode(_withoutSelector(reason), (address, bytes4, bytes, bytes));
-            assertEq(bytes4(inner), ReverseV4Hook.PoolFeeNotDynamic.selector, "the hook failed for another reason");
+            assertEq(bytes4(inner), FeeOverride.PoolFeeNotDynamic.selector, "the hook failed for another reason");
         }
     }
 
@@ -369,6 +363,16 @@ contract ReverseV4HookTest is HookTestBase {
         assertEq(
             _lastSwapFee(vm.getRecordedLogs()), BASE_FEE, "member's LP fee through a router the hook does not know"
         );
+    }
+
+    /// @dev A swapper the hook cannot recognise is address(0). Even a registry that lists address(0)
+    ///      as a holder must not turn every unrecognised swap into a member's swap.
+    function test_Swap_ByAnUnrecognisedSwapper_PaysBaseFee_EvenIfTheRegistryListsAddressZero() public {
+        registry.set(address(0), CREDENTIAL_ID, true);
+
+        vm.recordLogs();
+        _swap(key, true, 1e15);
+        assertEq(_lastSwapFee(vm.getRecordedLogs()), BASE_FEE, "an unrecognised swapper was charged the member fee");
     }
 
     function test_Swap_WhenTheRegistryReverts_ExecutesAtBaseFee() public {
@@ -577,6 +581,58 @@ contract ReverseV4HookTest is HookTestBase {
         assertGe(hook.pot(id, currency1), pot1, "trading with yourself shrank currency1's pot");
     }
 
+    // ── 6b. the treasury ─────────────────────────────────────────────────────────────────────
+
+    function test_Sweep_ByAnyone_PaysTheTreasuryItsShareOfTheHookFees_Once() public {
+        _routerSwap(stranger, true, 1e18);
+        uint256 taken = hook.feesTaken(id, currency0);
+        assertEq(taken, 1e18 * uint256(HOOK_FEE) / PIPS, "hook fees taken");
+
+        uint256 callerBefore = _token(currency0).balanceOf(stranger);
+        vm.prank(stranger);
+        uint256 amount = hook.sweep(id, currency0);
+
+        assertEq(amount, taken * TREASURY_SHARE / PIPS, "the sweep is not the treasury's share");
+        assertEq(_token(currency0).balanceOf(treasury), amount, "the treasury did not receive the sweep");
+        assertEq(_token(currency0).balanceOf(stranger), callerBefore, "the caller received something");
+        assertEq(hook.pot(id, currency0), taken - amount, "the pot did not fall by the sweep");
+        assertEq(_claims(currency0), hook.pot(id, currency0), "the pot is not backed one for one by claims");
+
+        vm.expectRevert(HookFeePotTemplate.NothingToSweep.selector);
+        hook.sweep(id, currency0);
+    }
+
+    /// @dev A sweep comes out of the pot. What has been credited to an LP is no longer in the pot.
+    function test_Sweep_NeverReachesWhatIsOwed() public {
+        _routerSwap(stranger, true, 1e18);
+        _routerSwap(stranger, false, 1e18);
+        _collect(member, memberTokenId);
+        uint256 owed0 = hook.owed(member, currency0);
+        assertGt(owed0, 0, "nothing was credited, so there is nothing to protect");
+
+        hook.sweep(id, currency0);
+        assertEq(
+            _claims(currency0), hook.pot(id, currency0) + owed0, "after the sweep the hook holds less than it owes"
+        );
+
+        uint256 before = _token(currency0).balanceOf(member);
+        vm.prank(member);
+        hook.claim(currency0);
+        assertEq(_token(currency0).balanceOf(member) - before, owed0, "the member was paid less than was owed");
+    }
+
+    /// @dev The treasury's share is of fees taken, but it can only take what the pot still holds.
+    function test_Sweep_WhenBonusesHaveEmptiedThePot_HasNothingToTake() public {
+        _dustSwaps(100);
+        _routerSwap(stranger, true, 4000); // 2 wei of hook fee, less than the bonus on the fees
+        _collect(member, memberTokenId);
+        assertEq(hook.pot(id, currency0), 0, "the pot was not emptied by the bonus");
+
+        assertEq(hook.sweepable(id, currency0), 0, "sweepable from an empty pot");
+        vm.expectRevert(HookFeePotTemplate.NothingToSweep.selector);
+        hook.sweep(id, currency0);
+    }
+
     // ── 7. the bonus rule on its own ─────────────────────────────────────────────────────────
 
     function testFuzz_BonusRule_NeverExceedsThePot_AndIsFullWhenThePotAllows(uint128 fees, uint128 available) public {
@@ -621,19 +677,22 @@ contract ReverseV4HookTest is HookTestBase {
     // ── 9. fuzz: the hook never owes more than it holds ──────────────────────────────────────
 
     /// @dev Any mix of exact-input and exact-output swaps by either wallet in either direction, fee
-    ///      collections by either LP, and claims. After every step, for each currency: the claims the hook holds equal the pot plus
+    ///      collections by either LP, claims, and sweeps to the treasury. After every step, for each currency: the claims the hook holds equal the pot plus
     ///      everything owed. So what has been credited can always be paid.
     function testFuzz_ClaimsHeld_AlwaysEqualPotPlusOwed(uint256 seed, uint8 steps) public {
         uint256 n = bound(steps, 1, 8);
         for (uint256 i = 0; i < n; i++) {
             uint256 r = uint256(keccak256(abi.encode(seed, i)));
-            uint256 action = r % 5;
+            uint256 action = r % 6;
             address who = (r >> 8) % 2 == 0 ? member : stranger;
 
             if (action < 2) {
                 _routerSwap(who, action == 0, bound(r >> 16, 1, 1e17));
             } else if (action == 4) {
                 _routerSwapExactOut(who, (r >> 12) % 2 == 0, bound(r >> 16, 1, 1e17));
+            } else if (action == 5) {
+                Currency swept = (r >> 16) % 2 == 0 ? currency0 : currency1;
+                if (hook.sweepable(id, swept) > 0) hook.sweep(id, swept);
             } else if (action == 2) {
                 _collect(who, who == member ? memberTokenId : strangerTokenId);
             } else {
@@ -651,7 +710,15 @@ contract ReverseV4HookTest is HookTestBase {
             assertEq(
                 _claims(currency1), hook.pot(id, currency1) + hook.owed(member, currency1), "currency1: held != books"
             );
+            _assertTreasuryWithinItsShare(currency0);
+            _assertTreasuryWithinItsShare(currency1);
         }
+    }
+
+    function _assertTreasuryWithinItsShare(Currency currency) internal view {
+        uint256 swept = hook.swept(id, currency);
+        assertEq(_token(currency).balanceOf(treasury), swept, "the treasury holds other than what was swept");
+        assertLe(swept * PIPS, hook.feesTaken(id, currency) * TREASURY_SHARE, "the treasury took more than its share");
     }
 
     function _withoutSelector(bytes memory data) internal pure returns (bytes memory out) {
