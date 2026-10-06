@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # run.sh — the ONLY way this template sends a transaction. You run it; nothing else does.
 #
-#   ACCOUNT=<keystore name> SENDER=<its address> bash script/handoff/run.sh <deploy|demo> <sepolia|base-sepolia|unichain-sepolia> [hook]
+#   ACCOUNT=<keystore name> SENDER=<its address> bash script/handoff/run.sh <deploy|demo|deploy-reverse> <sepolia|base-sepolia|unichain-sepolia> [hook]
+#
+# deploy-reverse deploys ReverseV4Hook and also needs, in the environment: CREDENTIAL, CREDENTIAL_ID,
+# POSITION_MANAGER, SWAP_ROUTER, TREASURY. The rates, including the 9.9% treasury share, are fixed in
+# script/DeployReverseV4Hook.s.sol and cannot be set from here.
 #
 # Without LIVE=1 it is a dry run: forge simulates against the live chain and sends nothing.
 # With LIVE=1 it signs with your Foundry keystore (`cast wallet import <name> --interactive`);
@@ -14,7 +18,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-step=${1:?deploy or demo}; net=${2:?sepolia, base-sepolia or unichain-sepolia}; hook=${3:-}
+step=${1:?deploy, demo or deploy-reverse}; net=${2:?sepolia, base-sepolia or unichain-sepolia}; hook=${3:-}
 : "${ACCOUNT:?set ACCOUNT to your keystore name}" "${SENDER:?set SENDER to the address of that account}"
 
 # Keyless public RPCs. Override with RPC=... if one is down; never paste a keyed URL into a file.
@@ -46,5 +50,12 @@ case "$step" in
     [ -n "$hook" ] || { echo "STOP: demo needs the hook address from the deploy step"; exit 1; }
     [ "$(cast code "$hook" --rpc-url "$rpc")" != 0x ] || { echo "STOP: no code at $hook. Deploy first."; exit 1; }
     HOOK="$hook" forge script script/DeployHook.s.sol:DemoHook --rpc-url "$rpc" --sender "$SENDER" "${send[@]}";;
+  deploy-reverse)
+    : "${CREDENTIAL:?set CREDENTIAL}" "${CREDENTIAL_ID:?set CREDENTIAL_ID}" "${POSITION_MANAGER:?set POSITION_MANAGER}"
+    : "${SWAP_ROUTER:?set SWAP_ROUTER}" "${TREASURY:?set TREASURY}"
+    for a in "$CREDENTIAL" "$POSITION_MANAGER" "$SWAP_ROUTER"; do
+      [ "$(cast code "$a" --rpc-url "$rpc")" != 0x ] || { echo "STOP: no code at $a on $net"; exit 1; }
+    done
+    forge script script/DeployReverseV4Hook.s.sol:DeployReverseV4Hook --rpc-url "$rpc" --sender "$SENDER" "${send[@]}";;
   *) echo "STOP: unknown step $step"; exit 1;;
 esac
