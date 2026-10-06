@@ -8,6 +8,7 @@ import {ReverseV4Hook} from "../src/ReverseV4Hook.sol";
 import {ICredential} from "../src/interfaces/ICredential.sol";
 import {TestnetCredentialRegistry} from "../src/testnet/TestnetCredentialRegistry.sol";
 import {DeployReverseV4Hook} from "../script/DeployReverseV4Hook.s.sol";
+import {DemoReverseV4Hook} from "../script/DemoReverseV4Hook.s.sol";
 
 import {IUniswapV4Router04} from "hookmate/interfaces/router/IUniswapV4Router04.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -241,5 +242,47 @@ contract ReverseV4HookBaseSepoliaTest is Test {
         assertEq(token0.balanceOf(issuer) - treasuryBefore, swept, "the sweep did not reach the treasury");
         assertLe(swept * 1e6, hook.feesTaken(id, currency0) * script.TREASURY_SHARE(), "the treasury took more than its share");
         assertEq(manager.balanceOf(address(hook), currency0.toId()), hook.pot(id, currency0), "claims held != pot");
+    }
+
+    // ── the live-fire demo script, against the hook that is really deployed ─────────────────────
+
+    ReverseV4Hook internal constant DEPLOYED_HOOK = ReverseV4Hook(0x03C77a74F3ecBc519F3590F5aff405a57401e5ec);
+
+    /// @dev The demo script from start to finish, on the hook deployed on 2026-10-06. Inside a test the
+    ///      script's sender is forge's default sender, so that address is granted the credential here
+    ///      by the registry's real issuer; on the testnet the sender is the issuer, who already holds it.
+    function test_TheDemoScript_RunsEndToEnd_AgainstTheDeployedHook() public {
+        assertGt(address(DEPLOYED_HOOK).code.length, 0, "the hook is not deployed on this chain");
+        (, address sender,) = vm.readCallers();
+        vm.prank(issuer);
+        REGISTRY.grant(sender, KIND, uint64(block.timestamp + 1 days));
+
+        DemoReverseV4Hook demo = new DemoReverseV4Hook();
+        DemoReverseV4Hook.Result memory r = demo.demo(DEPLOYED_HOOK, UNIVERSAL_ROUTER_2_1_2);
+
+        assertEq(r.feeFirstSwap, 500, "LP fee of the first swap");
+        assertEq(r.feeSecondSwap, 500, "LP fee of the second swap");
+        assertGt(r.fees0, 0, "no LP fees in token0");
+        assertGt(r.fees1, 0, "no LP fees in token1");
+        assertEq(r.bonus0, r.fees0 * 150_000 / 1e6, "bonus in token0");
+        assertEq(r.bonus1, r.fees1 * 150_000 / 1e6, "bonus in token1");
+        assertGt(r.swept0, 0, "nothing was swept in token0");
+        assertEq(DEPLOYED_HOOK.owed(sender, Currency.wrap(r.token0)), 0, "the bonus was not claimed");
+    }
+
+    /// @dev The script refuses a sender without the credential before it sends anything.
+    function test_TheDemoScript_RevertWhen_TheSenderHoldsNoCredential() public {
+        (, address sender,) = vm.readCallers();
+        DemoReverseV4Hook demo = new DemoReverseV4Hook();
+        vm.expectRevert(abi.encodeWithSelector(DemoReverseV4Hook.SenderHoldsNoCredential.selector, sender));
+        demo.demo(DEPLOYED_HOOK, UNIVERSAL_ROUTER_2_1_2);
+    }
+
+    function test_TheDemoScript_RevertWhen_TheRouterIsNotTheHooksTrustedOne() public {
+        DemoReverseV4Hook demo = new DemoReverseV4Hook();
+        vm.expectRevert(
+            abi.encodeWithSelector(DemoReverseV4Hook.RouterIsNotTheHooksTrustedRouter.selector, HOOKMATE_ROUTER)
+        );
+        demo.demo(DEPLOYED_HOOK, HOOKMATE_ROUTER);
     }
 }

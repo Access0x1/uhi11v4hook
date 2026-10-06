@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # run.sh — the ONLY way this template sends a transaction. You run it; nothing else does.
 #
-#   ACCOUNT=<keystore name> SENDER=<its address> bash script/handoff/run.sh <deploy|demo|deploy-reverse|deploy-registry> <sepolia|base-sepolia|unichain-sepolia> [hook]
+#   ACCOUNT=<keystore name> SENDER=<its address> bash script/handoff/run.sh <deploy|demo|deploy-reverse|deploy-registry|demo-reverse> <sepolia|base-sepolia|unichain-sepolia> [hook]
 #
 # deploy-reverse deploys ReverseV4Hook and also needs, in the environment: CREDENTIAL, CREDENTIAL_ID,
 # POSITION_MANAGER, SWAP_ROUTER, TREASURY. The rates, including the 9.9% treasury share, are fixed in
 # script/DeployReverseV4Hook.s.sol and cannot be set from here.
+#
+# demo-reverse <net> <hook> runs one real pass through a deployed ReverseV4Hook: two demo tokens, a
+# pool, a position, a swap each way, the fees collected, the bonus claimed, the treasury swept. It
+# needs SWAP_ROUTER, the hook's trusted router, and a sender who holds the hook's credential.
 #
 # deploy-registry deploys the testnet credential registry. Its issuer, the one address that can grant
 # and revoke, is ISSUER if set and otherwise SENDER. It cannot be changed after deployment.
@@ -21,7 +25,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-step=${1:?deploy, demo, deploy-reverse or deploy-registry}; net=${2:?sepolia, base-sepolia or unichain-sepolia}; hook=${3:-}
+step=${1:?deploy, demo, deploy-reverse, deploy-registry or demo-reverse}; net=${2:?sepolia, base-sepolia or unichain-sepolia}; hook=${3:-}
 : "${ACCOUNT:?set ACCOUNT to your keystore name}" "${SENDER:?set SENDER to the address of that account}"
 
 # Keyless public RPCs. Override with RPC=... if one is down; never paste a keyed URL into a file.
@@ -80,5 +84,11 @@ case "$step" in
     case "$ISSUER" in 0x[0-9a-fA-F][0-9a-fA-F]*) [ ${#ISSUER} -eq 42 ] || { echo "STOP: ISSUER is not an address: $ISSUER"; exit 1; };; *) echo "STOP: ISSUER is not an address: $ISSUER"; exit 1;; esac
     echo "issuer $ISSUER (permanent)"
     ISSUER="$ISSUER" forge script script/DeployTestnetCredentialRegistry.s.sol:DeployTestnetCredentialRegistry --rpc-url "$rpc" --sender "$SENDER" ${gasopt[@]+"${gasopt[@]}"} ${send[@]+"${send[@]}"};;
+  demo-reverse)
+    [ -n "$hook" ] || { echo "STOP: demo-reverse needs the hook address"; exit 1; }
+    : "${SWAP_ROUTER:?set SWAP_ROUTER to the trusted router of the hook}"
+    [ "$(cast code "$hook" --rpc-url "$rpc")" != 0x ] || { echo "STOP: no code at $hook on $net"; exit 1; }
+    [ "$(cast call "$hook" 'trustedRouter(address)(bool)' "$SWAP_ROUTER" --rpc-url "$rpc")" = true ] || { echo "STOP: $SWAP_ROUTER is not the trusted router of the hook"; exit 1; }
+    HOOK="$hook" SWAP_ROUTER="$SWAP_ROUTER" forge script script/DemoReverseV4Hook.s.sol:DemoReverseV4Hook --rpc-url "$rpc" --sender "$SENDER" ${gasopt[@]+"${gasopt[@]}"} ${send[@]+"${send[@]}"};;
   *) echo "STOP: unknown step $step"; exit 1;;
 esac
