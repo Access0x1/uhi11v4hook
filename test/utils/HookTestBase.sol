@@ -104,6 +104,53 @@ abstract contract HookTestBase is Test {
         manager.initialize(key, TickMath.getSqrtPriceAtTick(0));
     }
 
+    // ── native ETH ───────────────────────────────────────────────────────────────────────────
+    //
+    // Native ETH is Currency.wrap(address(0)). It sorts below every token, so in a native pool it is
+    // always currency0: zeroForOne spends ETH, oneForZero receives it.
+
+    /// @dev v4-core's test routers send back any ETH they were given and did not use.
+    receive() external payable {}
+
+    /// @notice A pool for (native ETH, currency1) naming `hook`, opened at tick 0.
+    function _initNativePool(IHooks hook) internal returns (PoolKey memory key) {
+        key = PoolKey({
+            currency0: Currency.wrap(address(0)), currency1: currency1, fee: FEE, tickSpacing: TICK_SPACING, hooks: hook
+        });
+        manager.initialize(key, TickMath.getSqrtPriceAtTick(0));
+    }
+
+    /// @notice The same position as _addLiquidity, on a native pool. Sends more ETH than the position
+    ///         needs (about 0.6 ether); the router returns the rest.
+    function _addNativeLiquidity(PoolKey memory key) internal {
+        vm.deal(address(this), address(this).balance + 1 ether);
+        liquidityRouter.modifyLiquidity{value: 1 ether}(
+            key,
+            ModifyLiquidityParams({
+                tickLower: TICK_LOWER, tickUpper: TICK_UPPER, liquidityDelta: LIQUIDITY, salt: bytes32(0)
+            }),
+            ""
+        );
+    }
+
+    /// @notice A swap on a native pool, sending `value` wei with it; the router returns what it did not use.
+    /// @param amountSpecified negative for exact input, positive for exact output.
+    function _swapNative(PoolKey memory key, bool zeroForOne, int256 amountSpecified, uint256 value)
+        internal
+        returns (BalanceDelta)
+    {
+        return swapRouter.swap{value: value}(
+            key,
+            SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: amountSpecified,
+                sqrtPriceLimitX96: zeroForOne ? MIN_PRICE_LIMIT : MAX_PRICE_LIMIT
+            }),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ""
+        );
+    }
+
     function _addLiquidity(PoolKey memory key) internal {
         liquidityRouter.modifyLiquidity(
             key,

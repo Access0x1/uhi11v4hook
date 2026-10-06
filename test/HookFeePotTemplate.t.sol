@@ -26,6 +26,35 @@ contract PlainHookFee is HookFeePotTemplate {
     {}
 }
 
+/// @dev Test-only. A treasury that refuses ETH.
+contract TreasuryThatRefusesEth {
+    receive() external payable {
+        revert("no ETH here");
+    }
+}
+
+/// @dev Test-only. A treasury that, on being paid ETH, tries to sweep again before the first sweep
+///      has finished.
+contract TreasuryThatSweepsAgain {
+    HookFeePotTemplate public hook;
+    PoolId public id;
+    uint256 public attempts;
+    bytes4 public refusedWith;
+
+    function aim(HookFeePotTemplate hook_, PoolId id_) external {
+        hook = hook_;
+        id = id_;
+    }
+
+    receive() external payable {
+        attempts++;
+        try hook.sweep(id, Currency.wrap(address(0))) {}
+        catch (bytes memory reason) {
+            refusedWith = bytes4(reason);
+        }
+    }
+}
+
 contract HookFeePotTemplateTest is HookTestBase {
     /// @dev The mask every hook on this template carries, as a literal: beforeSwap (1 << 7) | afterSwap
     ///      (1 << 6) | beforeSwapReturnDelta (1 << 3) | afterSwapReturnDelta (1 << 2).
@@ -184,6 +213,163 @@ contract HookFeePotTemplateTest is HookTestBase {
         (ok, ret) = _tryPlace(_initcode(HOOK_FEE, address(0), TREASURY_SHARE), other);
         assertFalse(ok, "a share for a treasury of address zero was accepted");
         assertEq(bytes4(ret), HookFeePotTemplate.TreasuryNotSet.selector, "treasury: reverted for another reason");
+    }
+
+    // ── 3b. native ETH ───────────────────────────────────────────────────────────────────────
+
+    Currency internal constant ETH = Currency.wrap(address(0));
+
+    function _nativePoolOn(PlainHookFee on) internal returns (PoolKey memory nativeKey) {
+        nativeKey = _initNativePool(IHooks(address(on)));
+        _addNativeLiquidity(nativeKey);
+    }
+
+    function _hookWithTreasury(address treasury_, uint160 namespace) internal returns (PlainHookFee other) {
+        address where = _flagAddress(PLACED_FLAGS | (namespace << 20));
+        _place(_initcode(HOOK_FEE, treasury_, TREASURY_SHARE), where);
+        other = PlainHookFee(where);
+    }
+
+    function test_NativeEth_ExactInput_PaysTheFeeOutOfTheEthSent() public {
+        PoolKey memory nativeKey = _nativePoolOn(hook);
+        PoolId nativeId = nativeKey.toId();
+        vm.deal(address(this), 1 ether);
+
+        BalanceDelta delta = _swapNative(nativeKey, true, -0.1 ether, 0.1 ether);
+
+        assertEq(address(this).balance, 0.9 ether, "the swapper paid other than the ETH they asked to");
+        assertEq(delta.amount0(), -0.1 ether, "the swap's ETH delta is not what was requested");
+        assertEq(hook.pot(nativeId, ETH), 0.1 ether * uint256(HOOK_FEE) / PIPS, "hook fee is not 0.05% of the ETH in");
+        assertEq(_claims(ETH), hook.pot(nativeId, ETH), "the ETH pot is not backed one for one by claims");
+        assertEq(address(hook).balance, 0, "the hook holds ETH itself");
+    }
+
+    /// @dev The swapper names the tokens out and sends more ETH than needed. They are charged what
+    ///      the pool took plus the hook fee, and the router returns the rest.
+    function test_NativeEth_ExactOutput_PaysTheFeeOnTop_AndTheRestOfTheEthComesBack() public {
+        PoolKey memory nativeKey = _nativePoolOn(hook);
+        PoolId nativeId = nativeKey.toId();
+        vm.deal(address(this), 1 ether);
+        uint256 tokensBefore = MockERC20(Currency.unwrap(currency1)).balanceOf(address(this));
+
+        BalanceDelta delta = _swapNative(nativeKey, true, 0.1 ether, 1 ether);
+
+        uint256 paid = 1 ether - address(this).balance;
+        uint256 fee = hook.pot(nativeId, ETH);
+        assertEq(MockERC20(Currency.unwrap(currency1)).balanceOf(address(this)) - tokensBefore, 0.1 ether, "tokens out");
+        assertEq(paid, uint256(uint128(-delta.amount0())), "ETH kept by the router: the refund is wrong");
+        assertGt(fee, 0, "no hook fee was taken");
+        assertEq(fee, (paid - fee) * HOOK_FEE / PIPS, "hook fee is not 0.05% of the ETH the pool charged");
+        assertEq(address(swapRouter).balance, 0, "the router kept ETH");
+        assertEq(address(hook).balance, 0, "the hook holds ETH itself");
+    }
+
+    /// @dev ETH as the OUTPUT: the fee is taken in the token paid in, and the ETH pot does not move.
+    function test_NativeEth_AsOutput_TheFeeIsTakenInTheTokenPaidIn() public {
+        PoolKey memory nativeKey = _nativePoolOn(hook);
+        PoolId nativeId = nativeKey.toId();
+        uint256 ethBefore = address(this).balance;
+
+        _swapNative(nativeKey, false, -0.1 ether, 0); // exact input of the token
+        assertEq(hook.pot(nativeId, currency1), 0.1 ether * uint256(HOOK_FEE) / PIPS, "exact input: fee in the token");
+
+        uint256 potBefore = hook.pot(nativeId, currency1);
+        _swapNative(nativeKey, false, 0.05 ether, 0); // exact output of ETH
+        assertGt(hook.pot(nativeId, currency1), potBefore, "exact output: no fee in the token");
+
+        assertEq(hook.pot(nativeId, ETH), 0, "the ETH pot moved on swaps that paid in the token");
+        assertGt(address(this).balance, ethBefore + 0.05 ether, "the swapper did not receive the ETH");
+    }
+
+    function test_NativeEth_Sweep_PaysTheTreasuryInEth() public {
+        PoolKey memory nativeKey = _nativePoolOn(hook);
+        PoolId nativeId = nativeKey.toId();
+        vm.deal(address(this), 1 ether);
+        _swapNative(nativeKey, true, -0.1 ether, 0.1 ether);
+        uint256 taken = hook.feesTaken(nativeId, ETH);
+
+        uint256 amount = hook.sweep(nativeId, ETH);
+
+        assertEq(amount, taken * TREASURY_SHARE / PIPS, "the sweep is not the treasury's share");
+        assertEq(treasury.balance, amount, "the treasury was not paid in ETH");
+        assertEq(_claims(ETH), hook.pot(nativeId, ETH), "the ETH pot is not backed one for one by claims");
+    }
+
+    /// @dev A treasury that cannot receive ETH fails its own sweep and nothing else: the pot, the
+    ///      books and the pool are as they were, and swaps go on.
+    function test_NativeEth_ATreasuryThatRefusesEth_FailsOnlyItsOwnSweep() public {
+        PlainHookFee other = _hookWithTreasury(address(new TreasuryThatRefusesEth()), 3);
+        PoolKey memory nativeKey = _nativePoolOn(other);
+        PoolId nativeId = nativeKey.toId();
+        vm.deal(address(this), 1 ether);
+        _swapNative(nativeKey, true, -0.1 ether, 0.1 ether);
+        uint256 potBefore = other.pot(nativeId, ETH);
+
+        vm.expectRevert();
+        other.sweep(nativeId, ETH);
+
+        assertEq(other.pot(nativeId, ETH), potBefore, "a failed sweep changed the pot");
+        assertEq(other.swept(nativeId, ETH), 0, "a failed sweep was recorded");
+        assertEq(manager.balanceOf(address(other), 0), potBefore, "a failed sweep changed the claims held");
+        _swapNative(nativeKey, true, -0.1 ether, 0.1 ether); // the pool still trades
+        assertGt(other.pot(nativeId, ETH), potBefore, "the pool stopped taking fees");
+    }
+
+    /// @dev Paying ETH hands control to the treasury in the middle of a sweep. It tries to sweep
+    ///      again. The second sweep is refused, and the treasury ends with its share once.
+    function test_NativeEth_ATreasuryThatSweepsAgainWhileBeingPaid_GetsItsShareOnce() public {
+        TreasuryThatSweepsAgain greedy = new TreasuryThatSweepsAgain();
+        PlainHookFee other = _hookWithTreasury(address(greedy), 4);
+        PoolKey memory nativeKey = _nativePoolOn(other);
+        PoolId nativeId = nativeKey.toId();
+        greedy.aim(other, nativeId);
+        vm.deal(address(this), 1 ether);
+        _swapNative(nativeKey, true, -0.1 ether, 0.1 ether);
+        uint256 share = other.feesTaken(nativeId, ETH) * TREASURY_SHARE / PIPS;
+
+        other.sweep(nativeId, ETH);
+
+        assertEq(greedy.attempts(), 1, "the treasury was not paid in ETH exactly once");
+        assertEq(greedy.refusedWith(), HookFeePotTemplate.NothingToSweep.selector, "the second sweep was not refused");
+        assertEq(address(greedy).balance, share, "the treasury holds other than its share");
+        assertEq(other.swept(nativeId, ETH), share, "more was recorded as swept than the share");
+        assertEq(manager.balanceOf(address(other), 0), other.pot(nativeId, ETH), "claims held != pot");
+    }
+
+    /// @dev The books fuzz, on a native pool: ETH in and out, exact input and exact output, sweeps.
+    function testFuzz_NativeEth_ThePotIsAlwaysBacked_AndTheTreasuryNeverExceedsItsShare(uint256 seed, uint8 steps)
+        public
+    {
+        PoolKey memory nativeKey = _nativePoolOn(hook);
+        PoolId nativeId = nativeKey.toId();
+        vm.deal(address(this), 100 ether);
+        Currency[2] memory currencies = [ETH, currency1];
+
+        uint256 n = bound(steps, 1, 10);
+        for (uint256 i = 0; i < n; i++) {
+            uint256 r = uint256(keccak256(abi.encode(seed, i)));
+            bool zeroForOne = (r >> 8) % 2 == 0;
+            uint256 amount = bound(r >> 16, 1, 0.1 ether);
+
+            if (r % 3 == 0) {
+                _swapNative(nativeKey, zeroForOne, -int256(amount), zeroForOne ? amount : 0);
+            } else if (r % 3 == 1) {
+                _swapNative(nativeKey, zeroForOne, int256(amount), zeroForOne ? 1 ether : 0);
+            } else if (hook.sweepable(nativeId, currencies[zeroForOne ? 0 : 1]) > 0) {
+                hook.sweep(nativeId, currencies[zeroForOne ? 0 : 1]);
+            }
+
+            for (uint256 c = 0; c < 2; c++) {
+                uint256 taken = hook.feesTaken(nativeId, currencies[c]);
+                uint256 swept = hook.swept(nativeId, currencies[c]);
+                assertEq(_claims(currencies[c]), hook.pot(nativeId, currencies[c]), "claims held != pot");
+                assertEq(hook.pot(nativeId, currencies[c]) + swept, taken, "pot + swept != fees ever taken");
+                assertLe(swept * PIPS, taken * TREASURY_SHARE, "the treasury took more than its share");
+            }
+            assertEq(treasury.balance, hook.swept(nativeId, ETH), "treasury ETH != swept");
+            assertEq(address(hook).balance, 0, "the hook holds ETH itself");
+            assertEq(address(swapRouter).balance, 0, "the router kept ETH");
+        }
     }
 
     // ── 4. access, and the books ─────────────────────────────────────────────────────────────
