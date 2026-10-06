@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # run.sh — the ONLY way this template sends a transaction. You run it; nothing else does.
 #
-#   ACCOUNT=<keystore name> SENDER=<its address> bash script/handoff/run.sh <deploy|demo|deploy-reverse> <sepolia|base-sepolia|unichain-sepolia> [hook]
+#   ACCOUNT=<keystore name> SENDER=<its address> bash script/handoff/run.sh <deploy|demo|deploy-reverse|deploy-registry> <sepolia|base-sepolia|unichain-sepolia> [hook]
 #
 # deploy-reverse deploys ReverseV4Hook and also needs, in the environment: CREDENTIAL, CREDENTIAL_ID,
 # POSITION_MANAGER, SWAP_ROUTER, TREASURY. The rates, including the 9.9% treasury share, are fixed in
 # script/DeployReverseV4Hook.s.sol and cannot be set from here.
+#
+# deploy-registry deploys the testnet credential registry. Its issuer, the one address that can grant
+# and revoke, is ISSUER if set and otherwise SENDER. It cannot be changed after deployment.
 #
 # Without LIVE=1 it is a dry run: forge simulates against the live chain and sends nothing.
 # With LIVE=1 it signs with your Foundry keystore (`cast wallet import <name> --interactive`);
@@ -18,7 +21,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-step=${1:?deploy, demo or deploy-reverse}; net=${2:?sepolia, base-sepolia or unichain-sepolia}; hook=${3:-}
+step=${1:?deploy, demo, deploy-reverse or deploy-registry}; net=${2:?sepolia, base-sepolia or unichain-sepolia}; hook=${3:-}
 : "${ACCOUNT:?set ACCOUNT to your keystore name}" "${SENDER:?set SENDER to the address of that account}"
 
 # Keyless public RPCs. Override with RPC=... if one is down; never paste a keyed URL into a file.
@@ -57,5 +60,10 @@ case "$step" in
       [ "$(cast code "$a" --rpc-url "$rpc")" != 0x ] || { echo "STOP: no code at $a on $net"; exit 1; }
     done
     forge script script/DeployReverseV4Hook.s.sol:DeployReverseV4Hook --rpc-url "$rpc" --sender "$SENDER" "${send[@]}";;
+  deploy-registry)
+    ISSUER=${ISSUER:-$SENDER}
+    case "$ISSUER" in 0x[0-9a-fA-F][0-9a-fA-F]*) [ ${#ISSUER} -eq 42 ] || { echo "STOP: ISSUER is not an address: $ISSUER"; exit 1; };; *) echo "STOP: ISSUER is not an address: $ISSUER"; exit 1;; esac
+    echo "issuer $ISSUER (permanent)"
+    ISSUER="$ISSUER" forge script script/DeployTestnetCredentialRegistry.s.sol:DeployTestnetCredentialRegistry --rpc-url "$rpc" --sender "$SENDER" "${send[@]}";;
   *) echo "STOP: unknown step $step"; exit 1;;
 esac
