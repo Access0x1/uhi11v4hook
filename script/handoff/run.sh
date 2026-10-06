@@ -60,7 +60,7 @@ if [ "${LIVE:-}" = 1 ]; then
   send=(--account "$ACCOUNT" --broadcast)
 fi
 
-echo "chain $chain | signer $SENDER | nonce $(cast nonce "$SENDER" --rpc-url "$rpc") | ${LIVE:+LIVE}${LIVE:-dry run}"
+echo "chain $chain | signer $SENDER | nonce $(cast nonce "$SENDER" --rpc-url "$rpc") | $([ "${LIVE:-}" = 1 ] && echo LIVE || echo "dry run")"
 case "$step" in
   deploy)
     forge script script/DeployHook.s.sol:DeployHook --rpc-url "$rpc" --sender "$SENDER" ${gasopt[@]+"${gasopt[@]}"} ${send[@]+"${send[@]}"};;
