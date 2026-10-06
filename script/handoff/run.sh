@@ -37,6 +37,19 @@ live=$(cast chain-id --rpc-url "$rpc")
 bal=$(cast balance "$SENDER" --rpc-url "$rpc")
 [ "$(python3 -c "print(int($bal >= $min))")" = 1 ] || { echo "STOP: $SENDER holds $bal wei, below $min"; exit 1; }
 
+# GAS_MULTIPLIER (percent, optional) replaces forge's default of 130. forge sizes a transaction's gas
+# limit from its OWN simulation, and a chain can charge more than forge's EVM assumes: measured
+# 2026-10-06, Sepolia charges about 1,540 gas per byte of deployed code where forge assumes 200, so a
+# contract creation sent with the default limit runs out of gas there. Size it from the node's own
+# estimate (`cast estimate --create`), never from forge's.
+gasopt=()
+if [ -n "${GAS_MULTIPLIER:-}" ]; then
+  case "$GAS_MULTIPLIER" in *[!0-9]*|"") echo "STOP: GAS_MULTIPLIER must be a whole number of percent"; exit 1;; esac
+  [ "$GAS_MULTIPLIER" -ge 100 ] && [ "$GAS_MULTIPLIER" -le 5000 ] || { echo "STOP: GAS_MULTIPLIER $GAS_MULTIPLIER is outside 100..5000"; exit 1; }
+  gasopt=(--gas-estimate-multiplier "$GAS_MULTIPLIER")
+  echo "gas limit: forge's simulated gas x $GAS_MULTIPLIER%"
+fi
+
 # send is empty in a dry run. bash 3.2 (the Mac's /bin/bash) treats "${send[@]}" of an empty array as an
 # unset variable under `set -u`, so every use below is written ${send[@]+"${send[@]}"}.
 send=()
@@ -50,22 +63,22 @@ fi
 echo "chain $chain | signer $SENDER | nonce $(cast nonce "$SENDER" --rpc-url "$rpc") | ${LIVE:+LIVE}${LIVE:-dry run}"
 case "$step" in
   deploy)
-    forge script script/DeployHook.s.sol:DeployHook --rpc-url "$rpc" --sender "$SENDER" ${send[@]+"${send[@]}"};;
+    forge script script/DeployHook.s.sol:DeployHook --rpc-url "$rpc" --sender "$SENDER" ${gasopt[@]+"${gasopt[@]}"} ${send[@]+"${send[@]}"};;
   demo)
     [ -n "$hook" ] || { echo "STOP: demo needs the hook address from the deploy step"; exit 1; }
     [ "$(cast code "$hook" --rpc-url "$rpc")" != 0x ] || { echo "STOP: no code at $hook. Deploy first."; exit 1; }
-    HOOK="$hook" forge script script/DeployHook.s.sol:DemoHook --rpc-url "$rpc" --sender "$SENDER" ${send[@]+"${send[@]}"};;
+    HOOK="$hook" forge script script/DeployHook.s.sol:DemoHook --rpc-url "$rpc" --sender "$SENDER" ${gasopt[@]+"${gasopt[@]}"} ${send[@]+"${send[@]}"};;
   deploy-reverse)
     : "${CREDENTIAL:?set CREDENTIAL}" "${CREDENTIAL_ID:?set CREDENTIAL_ID}" "${POSITION_MANAGER:?set POSITION_MANAGER}"
     : "${SWAP_ROUTER:?set SWAP_ROUTER}" "${TREASURY:?set TREASURY}"
     for a in "$CREDENTIAL" "$POSITION_MANAGER" "$SWAP_ROUTER"; do
       [ "$(cast code "$a" --rpc-url "$rpc")" != 0x ] || { echo "STOP: no code at $a on $net"; exit 1; }
     done
-    forge script script/DeployReverseV4Hook.s.sol:DeployReverseV4Hook --rpc-url "$rpc" --sender "$SENDER" ${send[@]+"${send[@]}"};;
+    forge script script/DeployReverseV4Hook.s.sol:DeployReverseV4Hook --rpc-url "$rpc" --sender "$SENDER" ${gasopt[@]+"${gasopt[@]}"} ${send[@]+"${send[@]}"};;
   deploy-registry)
     ISSUER=${ISSUER:-$SENDER}
     case "$ISSUER" in 0x[0-9a-fA-F][0-9a-fA-F]*) [ ${#ISSUER} -eq 42 ] || { echo "STOP: ISSUER is not an address: $ISSUER"; exit 1; };; *) echo "STOP: ISSUER is not an address: $ISSUER"; exit 1;; esac
     echo "issuer $ISSUER (permanent)"
-    ISSUER="$ISSUER" forge script script/DeployTestnetCredentialRegistry.s.sol:DeployTestnetCredentialRegistry --rpc-url "$rpc" --sender "$SENDER" ${send[@]+"${send[@]}"};;
+    ISSUER="$ISSUER" forge script script/DeployTestnetCredentialRegistry.s.sol:DeployTestnetCredentialRegistry --rpc-url "$rpc" --sender "$SENDER" ${gasopt[@]+"${gasopt[@]}"} ${send[@]+"${send[@]}"};;
   *) echo "STOP: unknown step $step"; exit 1;;
 esac
