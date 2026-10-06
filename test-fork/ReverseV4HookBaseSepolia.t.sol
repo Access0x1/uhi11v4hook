@@ -19,6 +19,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IV4Router} from "@uniswap/v4-periphery/src/interfaces/IV4Router.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
@@ -242,6 +243,51 @@ contract ReverseV4HookBaseSepoliaTest is Test {
         assertEq(token0.balanceOf(issuer) - treasuryBefore, swept, "the sweep did not reach the treasury");
         assertLe(swept * 1e6, hook.feesTaken(id, currency0) * script.TREASURY_SHARE(), "the treasury took more than its share");
         assertEq(manager.balanceOf(address(hook), currency0.toId()), hook.pot(id, currency0), "claims held != pot");
+    }
+
+    // ── which parameter layout Universal Router 2.1.2 accepts ───────────────────────────────────
+
+    /// @dev The same swap, on a pool with NO hook, encoded two ways. With the five-field
+    ///      `ExactInputSingleParams` of the v4-periphery pinned here (commit 7ebd04b, and the layout
+    ///      Uniswap's swap guide shows) the router reverts, and the revert carries no data at all.
+    ///      With the six-field layout of v4-periphery main (`minHopPriceX36` added) it executes.
+    function test_UniversalRouter_2_1_2_RevertsWithNoReason_OnTheFiveFieldSwapLayout() public {
+        PoolKey memory key = PoolKey({
+            currency0: currency0, currency1: currency1, fee: 3000, tickSpacing: TICK_SPACING, hooks: IHooks(address(0))
+        });
+        manager.initialize(key, TickMath.getSqrtPriceAtTick(0));
+        bytes memory mintActions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
+        bytes[] memory mintParams = new bytes[](2);
+        mintParams[0] = abi.encode(
+            key, int24(-120), int24(120), uint256(100e18), type(uint128).max, type(uint128).max, member, bytes("")
+        );
+        mintParams[1] = abi.encode(currency0, currency1);
+        vm.prank(member);
+        IPositionManagerLike(POSITION_MANAGER).modifyLiquidities(abi.encode(mintActions, mintParams), block.timestamp);
+
+        bytes memory actions = abi.encodePacked(
+            uint8(Actions.SWAP_EXACT_IN_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL)
+        );
+        bytes[] memory params = new bytes[](3);
+        params[0] = abi.encode(
+            IV4Router.ExactInputSingleParams({
+                poolKey: key, zeroForOne: true, amountIn: 1e15, amountOutMinimum: 0, hookData: bytes("")
+            })
+        );
+        params[1] = abi.encode(key.currency0, uint256(1e15));
+        params[2] = abi.encode(key.currency1, uint256(0));
+        bytes[] memory inputs = new bytes[](1);
+        inputs[0] = abi.encode(actions, params);
+
+        vm.prank(member);
+        (bool ok, bytes memory reason) = UNIVERSAL_ROUTER_2_1_2.call(
+            abi.encodeCall(IUniversalRouterLike.execute, (hex"10", inputs, block.timestamp))
+        );
+        assertFalse(ok, "the router accepted the five-field layout");
+        assertEq(reason.length, 0, "the revert carried a reason after all");
+
+        // The control: the identical swap with the six-field layout goes through.
+        assertEq(_swapThroughUniversalRouter(key, member), 3000, "LP fee with the six-field layout");
     }
 
     // ── the live-fire demo script, against the hook that is really deployed ─────────────────────
