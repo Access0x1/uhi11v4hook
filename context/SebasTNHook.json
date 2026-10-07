@@ -1,0 +1,166 @@
+{
+  "schemaVersion": "0",
+  "name": "SebasTNHook",
+  "description": "The books of a pool's liquidity providers. Each time a position collects LP fees through the PositionManager named at deployment, the hook adds them to a running total for the position's holder, per pool and per currency, and emits an event. It has no swap callback: to a swap this is a pool without a hook. It holds nothing, pays nothing, changes no fee and never stops a liquidity change.",
+  "status": "tested",
+  "source": {
+    "path": "src/business/SebasTNHook.sol",
+    "contract": "SebasTNHook",
+    "gitBlob": "4ba9020c661aa317f466115ee348b4b761304bbf",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x500",
+    "callbacks": [
+      "afterAddLiquidity",
+      "afterRemoveLiquidity"
+    ],
+    "returnsDelta": false
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": false,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": true,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": true,
+      "beforeSwap": false,
+      "afterSwap": false,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": false,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": false,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": true,
+      "swapAccess": "none"
+    }
+  },
+  "routing": {
+    "autoRoutable": true,
+    "needsHookData": false,
+    "reasons": [
+      "No swap callback at all, no dynamic fee and no returns-delta flag.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any pool may name this hook; each PoolId has its own totals.",
+    "fee": "Any. The hook does not read or set the fee.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "collected0, collected1",
+      "type": "mapping(PoolId => mapping(address => uint256))",
+      "kind": "storage",
+      "writtenBy": [
+        "afterAddLiquidity",
+        "afterRemoveLiquidity"
+      ],
+      "readBy": [
+        "anyone, through the public getters"
+      ]
+    },
+    {
+      "name": "positionManager",
+      "type": "address",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "afterAddLiquidity",
+        "afterRemoveLiquidity"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [
+    {
+      "expression": "total += the fees the PoolManager reports as accrued to the position in this call",
+      "format": "each currency's smallest unit",
+      "rounding": "none"
+    }
+  ],
+  "deltas": [
+    {
+      "callback": "afterAddLiquidity, afterRemoveLiquidity",
+      "returns": "BalanceDelta 0",
+      "currency": "none",
+      "settledBy": "Nobody. Without a returns-delta bit the PoolManager does not read the value."
+    }
+  ],
+  "externalCalls": [
+    {
+      "target": "the PositionManager named at deployment",
+      "function": "ownerOf(uint256)",
+      "why": "Names the holder the fees are counted for. In try/catch: if it reverts, nothing is counted and the liquidity change goes through."
+    }
+  ],
+  "accessControl": [
+    {
+      "function": "the hook callbacks",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes the PositionManager named at deployment is the official one: it sets a position's salt to its token id and its `ownerOf` names the holder."
+  ],
+  "doesNotGuarantee": [
+    "Does not count fees of a position that is not held through the PositionManager named at deployment.",
+    "Does not say the totals are income: it counts LP fees collected, not gains or losses on the position.",
+    "Does not follow a position's NFT backwards: fees collected after a transfer count for the new holder.",
+    "Does not hold, move or owe anything."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: afterAddLiquidity and afterRemoveLiquidity, mask 0x500.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address with one bit different.",
+      "test": "test_RevertWhen_PlacedAtAddressWithTheWrongFlag"
+    },
+    {
+      "statement": "Fees a position collects are added to its holder's total, to the unit.",
+      "test": "test_FeesAPositionCollects_AreAddedToItsHoldersTotal_ToTheUnit"
+    },
+    {
+      "statement": "The total runs, and each holder has their own.",
+      "test": "test_TheTotalRuns_AndEachHolderHasTheirOwn"
+    },
+    {
+      "statement": "A position not held through the PositionManager is left alone and not counted.",
+      "test": "test_APositionNotHeldThroughThePositionManager_IsLeftAlone"
+    },
+    {
+      "statement": "Over any swaps and collections, the books equal what the holder received.",
+      "test": "testFuzz_TheBooksEqualWhatTheHolderReceived"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "accounting",
+      "lp-fees",
+      "afterAddLiquidity",
+      "afterRemoveLiquidity"
+    ],
+    "integrations": []
+  }
+}
