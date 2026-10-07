@@ -1,0 +1,166 @@
+{
+  "schemaVersion": "0",
+  "name": "QuantLHook",
+  "description": "An LP fee by the day of the week. On a dynamic-fee pool a swap pays the base fee from Monday to Friday and the weekend fee on Saturday and Sunday, by UTC. Meant for assets whose reference market is closed at the weekend. The same fee for every swapper; it reads only the block's timestamp. It moves no funds and has no owner.",
+  "status": "tested",
+  "source": {
+    "path": "src/business/QuantLHook.sol",
+    "contract": "QuantLHook",
+    "gitBlob": "3f6c40e0e86a7533cf90cf139202b2b6c2d3cc21",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x2080",
+    "callbacks": [
+      "beforeInitialize",
+      "beforeSwap"
+    ],
+    "returnsDelta": false
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": true,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": true,
+      "afterSwap": false,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": false,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": true,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": false,
+      "swapAccess": "none"
+    }
+  },
+  "routing": {
+    "autoRoutable": false,
+    "needsHookData": false,
+    "reasons": [
+      "Dynamic fee: Uniswap's interface routes to it only after Uniswap Labs allowlists its address.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any dynamic-fee pool may name this hook.",
+    "fee": "Dynamic only: beforeInitialize refuses a static-fee pool, where a fee override would be ignored without any error.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "baseFee",
+      "type": "uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "trustedRouter",
+      "type": "mapping(address => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "weekendFee",
+      "type": "uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [
+    {
+      "expression": "weekday = (block.timestamp / 86400 + 4) % 7; weekend when weekday is 0 (Sunday) or 6 (Saturday)",
+      "format": "days since 1970-01-01, a Thursday",
+      "rounding": "down to the day, UTC"
+    }
+  ],
+  "deltas": [
+    {
+      "callback": "beforeSwap",
+      "returns": "BeforeSwapDelta 0, and the LP fee with the override flag set",
+      "currency": "none",
+      "settledBy": "Nobody: no delta is returned. The fee is charged by the pool itself, to its liquidity providers."
+    }
+  ],
+  "externalCalls": [],
+  "accessControl": [
+    {
+      "function": "the hook callbacks",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes a block's timestamp is right to within the few seconds its proposer may choose."
+  ],
+  "doesNotGuarantee": [
+    "Does not move or hold funds: the fee is the pool's own LP fee and goes to its liquidity providers.",
+    "Does not work on a static-fee pool: it refuses to be initialised on one.",
+    "Does not restrict which dynamic-fee pools use it.",
+    "Does not know holidays, half days or any market's real hours: only the day of the week, in UTC.",
+    "Does not read any price or market state."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: beforeInitialize and beforeSwap, mask 0x2080.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address with one bit different.",
+      "test": "test_RevertWhen_PlacedAtAddressWithTheWrongFlag"
+    },
+    {
+      "statement": "The weekend fee applies from Saturday's first second to Sunday's last, UTC, and the base fee otherwise.",
+      "test": "test_TheWeekendFee_FromSaturdaysFirstSecond_ToSundaysLast_UTC"
+    },
+    {
+      "statement": "The same fee for every swapper through any router.",
+      "test": "test_TheSameFeeForEveryone_ThroughAnyRouter"
+    },
+    {
+      "statement": "The weekend repeats every seven days.",
+      "test": "testFuzz_IsWeekend_RepeatsEverySevenDays"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "dynamic-fee",
+      "time",
+      "market-hours",
+      "beforeSwap"
+    ],
+    "integrations": []
+  }
+}
