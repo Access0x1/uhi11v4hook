@@ -64,6 +64,30 @@ Taken from theirs unchanged: the folder layout, `BaseHook`, the example hook's c
 6. Deploy: `ACCOUNT=<keystore> SENDER=<address> bash script/handoff/run.sh deploy sepolia` (dry
    run), then the same with `LIVE=1`.
 
+## Routing: which hooks Uniswap's interface reaches on its own
+
+Every hook and template in `src/` carries a `@custom:routing` line under its title. `make gate`
+checks each line against the code (`context/check_routing.py`).
+
+Uniswap Labs' [routing allowlist](https://developers.uniswap.org/hook-allowlist) (read
+2026-10-07) says a hook must apply, and is not routed to until approved, if it uses dynamic fees
+or either swap returns-delta flag, or if its address starts with `0x91`. Every other hook is
+allowlisted automatically.
+
+This is about Uniswap's own interface and router. The PoolManager is permissionless on every
+chain: any valid hook address can have pools, and any router that knows the pool can trade on it.
+
+| Contract | Mask | Routing | Why |
+|---|---|---|---|
+| `Counter` | `0x8C0` | AUTOMATIC | static fee, no returns-delta |
+| `OverrideFeeTemplate` | `0x2080` | **MANUAL** | dynamic-fee pools only |
+| `GatedSwapTemplate` | `0x80` | AUTOMATIC by flags | but it reverts swaps from anyone except a named executor |
+| `SwapReceiptTemplate` | `0x40` | AUTOMATIC | a swap sent without hookData leaves no receipt |
+| `HookFeePotTemplate` | `0xCC` | **MANUAL** | both swap returns-delta flags |
+| `FeesCollectedTemplate` | `0x500` | AUTOMATIC | no swap flag at all |
+| `HolderOnlyPoolTemplate` | `0x880` | AUTOMATIC by flags | but it reverts swaps from non-holders |
+| `ReverseV4Hook` | `0x25EC` | **MANUAL** | dynamic-fee pools only, and both swap returns-delta flags |
+
 ## What it does not do
 
 - It does not make a hook safe. It makes the silent failures loud. Delta-returning hooks still need

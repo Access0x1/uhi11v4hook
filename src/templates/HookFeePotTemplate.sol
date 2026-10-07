@@ -15,6 +15,8 @@ import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/Bef
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 /// @title HookFeePotTemplate
+/// @custom:routing MANUAL. Both swap returns-delta flags. Uniswap's interface does not route to a hook built on
+///                 this until Uniswap Labs allowlists its address. The PoolManager itself accepts it.
 /// @notice Template for a hook that takes a fee on every swap's input into a per-pool pot it holds,
 ///         and lets a fixed treasury take a fixed share of it. A hook built on it decides what the
 ///         rest of the pot is spent on, through `_spendFromPot` and `_payOut`.

@@ -4,7 +4,7 @@
 #   make build     compile
 #   make test      run every test
 #   make fmt       format src/ and test/ (writes files)
-#   make context   check every manifest in context/ against the tree
+#   make context   check every manifest in context/ against the tree, and every hook's routing note
 #   make gate      pins, format check, clean build, tests (at least one must run), manifests:
 #                  what must pass before a commit
 
@@ -24,6 +24,7 @@ fmt:
 
 context:
 	python3 context/check_context.py
+	python3 context/check_routing.py
 
 # `forge test` exits 0 when it finds no tests ("No tests found in project!"), which a stale
 # cache can cause: seen 2026-10-01 after a static analyser's partial build. So the gate builds
@@ -37,3 +38,4 @@ gate:
 		echo "gate: forge test failed, or ran no tests"; exit 1; \
 	fi
 	python3 context/check_context.py
+	python3 context/check_routing.py

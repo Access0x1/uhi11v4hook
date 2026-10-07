@@ -13,6 +13,7 @@ interface IPositionOwner {
 }
 
 /// @title FeesCollectedTemplate
+/// @custom:routing AUTOMATIC. No swap returns-delta flag, and it works on static-fee pools.
 /// @notice Template for a hook that acts when a position collects LP fees, knowing who owns the
 ///         position and how much it earned. A hook built on it writes one function, `_onFeesCollected`.
 /// @dev Two flags, so two bits in the address: afterAddLiquidity 0x400 | afterRemoveLiquidity 0x100 = 0x500.

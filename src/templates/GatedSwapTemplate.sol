@@ -9,6 +9,8 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/type
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 /// @title GatedSwapTemplate
+/// @custom:routing AUTOMATIC by its flags. But it reverts every swap that does not come from a named executor,
+///                 so a general router finds the pool and cannot trade on it.
 /// @notice Template for a hook that lets a swap through only from a named executor and only up to a
 ///         limit. A hook built on it writes `_limitFor`, and `_consume` if the limit is a budget.
 /// @dev One flag, so one bit in the address: beforeSwap 0x80. Moves no funds and returns no delta.

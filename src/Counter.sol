@@ -11,6 +11,7 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/type
 import {SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 /// @title Counter
+/// @custom:routing AUTOMATIC. Static-fee pools, no returns-delta flag.
 /// @notice Counts three things per pool: swaps about to run, swaps that ran, and liquidity additions
 ///         about to run. It moves no funds and changes no price or fee.
 /// @dev The example hook. Replace it with yours; keep the shape. Three callbacks, so three bits in the address: 0x800 | 0x80 | 0x40 = 0x8C0.

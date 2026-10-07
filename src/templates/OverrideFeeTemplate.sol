@@ -12,6 +12,8 @@ import {SwapperIdentity} from "./SwapperIdentity.sol";
 import {FeeOverride} from "./FeeOverride.sol";
 
 /// @title OverrideFeeTemplate
+/// @custom:routing MANUAL. Dynamic-fee pools only. Uniswap's interface does not route to a hook built on this
+///                 until Uniswap Labs allowlists its address. The PoolManager itself accepts it.
 /// @notice Template for a hook that sets the LP fee of each swap by who is swapping. A hook built on
 ///         it writes one function, `_feeFor`, and inherits everything a fee hook gets wrong silently.
 /// @dev Two flags, so two bits in the address: beforeInitialize 0x2000 | beforeSwap 0x80 = 0x2080.

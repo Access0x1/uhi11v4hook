@@ -12,6 +12,8 @@ import {SwapperIdentity} from "./SwapperIdentity.sol";
 import {IPositionOwner} from "./FeesCollectedTemplate.sol";
 
 /// @title HolderOnlyPoolTemplate
+/// @custom:routing AUTOMATIC by its flags. But it reverts swaps from anyone who does not hold the credential,
+///                 so a general router finds the pool and can trade on it only for holders.
 /// @notice Template for a pool only certain people may swap on or add liquidity to: holders of a
 ///         credential, an NFT, a completed check. A hook built on it writes one function, `_isAllowed`.
 /// @dev Two flags, so two bits in the address: beforeAddLiquidity 0x800 | beforeSwap 0x80 = 0x880.

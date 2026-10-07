@@ -18,6 +18,8 @@ import {SwapperIdentity} from "./templates/SwapperIdentity.sol";
 import {FeeOverride} from "./templates/FeeOverride.sol";
 
 /// @title ReverseV4Hook
+/// @custom:routing MANUAL. Dynamic-fee pools only, and both swap returns-delta flags. Uniswap's interface does not
+///                 route to it until Uniswap Labs allowlists this address. The PoolManager itself accepts it.
 /// @notice A loyalty hook with its own accounting, for dynamic-fee pools.
 ///         1. A swapper who holds the credential pays `memberFee` to the pool's LPs; anyone else pays `baseFee`.
 ///         2. Every swap also pays `hookFee` on its input into a per-pool pot the hook holds.

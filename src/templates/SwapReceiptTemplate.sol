@@ -12,6 +12,8 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {SwapperIdentity} from "./SwapperIdentity.sol";
 
 /// @title SwapReceiptTemplate
+/// @custom:routing AUTOMATIC. A swap routed without hookData goes through and leaves no receipt; a receipt
+///                 needs a caller that sends the hookData.
 /// @notice Template for a hook that writes one receipt for a swap that names a payee and a reference.
 ///         A hook built on it writes one function, `_payeeIsValid`.
 /// @dev One flag, so one bit in the address: afterSwap 0x40. Moves no funds, returns no delta, and
