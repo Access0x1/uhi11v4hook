@@ -1,0 +1,167 @@
+{
+  "schemaVersion": "0",
+  "name": "RebatoHook",
+  "description": "A lower LP fee during a promotion. On a dynamic-fee pool every swap pays the promo fee from the promotion's first second to its last, and the base fee before and after. The window is fixed at deployment. The saving reaches the swapper inside the swap, as more output; nothing is paid back afterwards. The same fee for every swapper. It moves no funds and has no owner.",
+  "status": "tested",
+  "source": {
+    "path": "src/business/RebatoHook.sol",
+    "contract": "RebatoHook",
+    "gitBlob": "85e0a71cf4dea899e6756b0cd60fc8ef38deb8da",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x2080",
+    "callbacks": [
+      "beforeInitialize",
+      "beforeSwap"
+    ],
+    "returnsDelta": false
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": true,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": true,
+      "afterSwap": false,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": false,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": true,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": false,
+      "swapAccess": "none"
+    }
+  },
+  "routing": {
+    "autoRoutable": false,
+    "needsHookData": false,
+    "reasons": [
+      "Dynamic fee: Uniswap's interface routes to it only after Uniswap Labs allowlists its address.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any dynamic-fee pool may name this hook.",
+    "fee": "Dynamic only: beforeInitialize refuses a static-fee pool, where a fee override would be ignored without any error.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "baseFee",
+      "type": "uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "trustedRouter",
+      "type": "mapping(address => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "promoFee, startsAt, endsAt",
+      "type": "uint24, uint64, uint64",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap",
+        "isOn"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [
+    {
+      "expression": "fee = promoFee when startsAt <= block.timestamp < endsAt, else baseFee",
+      "format": "pips, 1e6 = 100%; unix seconds",
+      "rounding": "none"
+    }
+  ],
+  "deltas": [
+    {
+      "callback": "beforeSwap",
+      "returns": "BeforeSwapDelta 0, and the LP fee with the override flag set",
+      "currency": "none",
+      "settledBy": "Nobody: no delta is returned. The fee is charged by the pool itself, to its liquidity providers."
+    }
+  ],
+  "externalCalls": [],
+  "accessControl": [
+    {
+      "function": "the hook callbacks",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes a block's timestamp is right to within the few seconds its proposer may choose."
+  ],
+  "doesNotGuarantee": [
+    "Does not move or hold funds: the fee is the pool's own LP fee and goes to its liquidity providers.",
+    "Does not work on a static-fee pool: it refuses to be initialised on one.",
+    "Does not restrict which dynamic-fee pools use it.",
+    "Does not pay anything back after a swap: the lower fee is the whole of the saving.",
+    "Does not let the window be moved or extended."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: beforeInitialize and beforeSwap, mask 0x2080.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address with one bit different.",
+      "test": "test_RevertWhen_PlacedAtAddressWithTheWrongFlag"
+    },
+    {
+      "statement": "The promo fee applies from its first second to its last and the base fee otherwise.",
+      "test": "test_ThePromoFee_FromItsFirstSecond_ToItsLast_AndTheBaseFeeOtherwise"
+    },
+    {
+      "statement": "During the promotion the same swap buys more.",
+      "test": "test_DuringThePromotion_TheSameSwapBuysMore"
+    },
+    {
+      "statement": "The fee is the promo fee exactly while the promotion is on.",
+      "test": "testFuzz_TheFeeIsThePromoFee_ExactlyWhileItIsOn"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "dynamic-fee",
+      "time-window",
+      "promotion",
+      "beforeSwap"
+    ],
+    "integrations": []
+  }
+}
