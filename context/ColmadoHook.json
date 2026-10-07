@@ -1,0 +1,190 @@
+{
+  "schemaVersion": "0",
+  "name": "ColmadoHook",
+  "description": "A lower LP fee for holders of a credential. On a dynamic-fee pool, a swapper who holds this hook's credential in the registry named at deployment pays the member fee; everyone else pays the base fee. Who is swapping is taken only from the router named at deployment, never from hookData. If the registry cannot be asked, the base fee applies and the swap goes through. It moves no funds and has no owner.",
+  "status": "tested",
+  "source": {
+    "path": "src/business/ColmadoHook.sol",
+    "contract": "ColmadoHook",
+    "gitBlob": "fabadc1a0688345255d14c1eadf7b7f6b002785b",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x2080",
+    "callbacks": [
+      "beforeInitialize",
+      "beforeSwap"
+    ],
+    "returnsDelta": false
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": true,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": true,
+      "afterSwap": false,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": false,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": true,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": false,
+      "swapAccess": "none"
+    }
+  },
+  "routing": {
+    "autoRoutable": false,
+    "needsHookData": false,
+    "reasons": [
+      "Dynamic fee: Uniswap's interface routes to it only after Uniswap Labs allowlists its address.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any dynamic-fee pool may name this hook.",
+    "fee": "Dynamic only: beforeInitialize refuses a static-fee pool, where a fee override would be ignored without any error.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "baseFee",
+      "type": "uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "trustedRouter",
+      "type": "mapping(address => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "registry, memberCredential, memberFee",
+      "type": "ICredential, bytes32, uint24",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [
+    {
+      "expression": "fee = memberFee if the swapper holds the credential, else baseFee",
+      "format": "pips, 1e6 = 100%",
+      "rounding": "none"
+    }
+  ],
+  "deltas": [
+    {
+      "callback": "beforeSwap",
+      "returns": "BeforeSwapDelta 0, and the LP fee with the override flag set",
+      "currency": "none",
+      "settledBy": "Nobody: no delta is returned. The fee is charged by the pool itself, to its liquidity providers."
+    }
+  ],
+  "externalCalls": [
+    {
+      "target": "the one router named at deployment",
+      "function": "msgSender()",
+      "why": "Only this address is asked who the swapper is. In try/catch: a router that reverts means nobody is recognised."
+    },
+    {
+      "target": "the registry named at deployment",
+      "function": "hasValidCredential(address,bytes32)",
+      "why": "Asks whether the swapper is a member. In try/catch: a registry that reverts means the base fee."
+    }
+  ],
+  "accessControl": [
+    {
+      "function": "the hook callbacks",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes the router named at deployment answers `msgSender()` with the account that called it. A router that lies makes every statement here about 'the swapper' false.",
+    "Assumes the registry named at deployment tells the truth and stays available. Whoever controls it controls what this hook decides."
+  ],
+  "doesNotGuarantee": [
+    "Does not move or hold funds: the fee is the pool's own LP fee and goes to its liquidity providers.",
+    "Does not work on a static-fee pool: it refuses to be initialised on one.",
+    "Does not restrict which dynamic-fee pools use it.",
+    "Does not give the member fee to a holder who swaps through any other router: such a swapper is not known and pays the base fee.",
+    "Does not stop a credential being lent: it prices by who holds it at the swap."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: beforeInitialize and beforeSwap, mask 0x2080.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address with one bit different.",
+      "test": "test_RevertWhen_PlacedAtAddressWithTheWrongFlag"
+    },
+    {
+      "statement": "A holder pays the member fee and everyone else the base fee.",
+      "test": "test_ARegularPaysTheMemberFee_AndEveryoneElseTheBaseFee"
+    },
+    {
+      "statement": "The fee follows the registry from the next swap.",
+      "test": "test_TheFeeFollowsTheRegistry_FromTheNextSwap"
+    },
+    {
+      "statement": "A holder through a router that was not named at deployment pays the base fee.",
+      "test": "test_ARegularThroughARouterThatIsNotTrusted_PaysTheBaseFee"
+    },
+    {
+      "statement": "A registry that reverts means the base fee, never a stopped swap.",
+      "test": "test_ARegistryThatReverts_MeansTheBaseFee_NeverAStoppedSwap"
+    },
+    {
+      "statement": "A static-fee pool is refused.",
+      "test": "test_RevertWhen_ThePoolHasAStaticFee"
+    },
+    {
+      "statement": "The fee charged is always one of the two.",
+      "test": "testFuzz_TheFeeIsAlwaysOneOfTheTwo"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "dynamic-fee",
+      "credential",
+      "loyalty",
+      "beforeSwap"
+    ],
+    "integrations": []
+  }
+}
