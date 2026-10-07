@@ -1,0 +1,158 @@
+{
+  "schemaVersion": "0",
+  "name": "GitHatHook",
+  "description": "A pool only named programs may trade on, each swap up to a fixed size. A swap is let through only when it comes from an executor named at deployment and requests at most the limit of the input currency; exact-output swaps are refused. The limit is per swap, not a budget. Adding and removing liquidity and donating are open to anyone. It moves no funds and has no owner.",
+  "status": "tested",
+  "source": {
+    "path": "src/business/GitHatHook.sol",
+    "contract": "GitHatHook",
+    "gitBlob": "13fcf9fccec591cb47dc4fdf03173de0dcd073e1",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x80",
+    "callbacks": [
+      "beforeSwap"
+    ],
+    "returnsDelta": false
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": false,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": true,
+      "afterSwap": false,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": false,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": false,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": true,
+      "swapAccess": "allowlist"
+    }
+  },
+  "routing": {
+    "autoRoutable": true,
+    "needsHookData": false,
+    "reasons": [
+      "No dynamic fee and no returns-delta flag, so a general router finds the pool.",
+      "But every swap that does not come from a named executor is refused, so a general router cannot trade on it.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any pool may name this hook.",
+    "fee": "Any. The hook does not read or set the fee.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "executor",
+      "type": "mapping(address => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "maxInput",
+      "type": "uint256",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [
+    {
+      "expression": "allowed when -amountSpecified <= maxInput, for an exact-input swap",
+      "format": "the input currency's smallest unit",
+      "rounding": "none"
+    }
+  ],
+  "deltas": [
+    {
+      "callback": "beforeSwap",
+      "returns": "BeforeSwapDelta 0, fee override 0, or a revert",
+      "currency": "none",
+      "settledBy": "Nobody: no delta is returned."
+    }
+  ],
+  "externalCalls": [],
+  "accessControl": [
+    {
+      "function": "the hook callbacks",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes the executors named at deployment are what they are meant to be: they are part of this hook's security boundary."
+  ],
+  "doesNotGuarantee": [
+    "Does not cap what an executor trades over time: the limit is per swap and may be used again in the next call.",
+    "Does not know the value of the input: the limit is a number of units, the same for either currency.",
+    "Does not gate liquidity or donations.",
+    "Does not allow exact-output swaps at all."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: beforeSwap, mask 0x80.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address with one bit different.",
+      "test": "test_RevertWhen_PlacedAtAddressWithTheWrongFlag"
+    },
+    {
+      "statement": "A swap from a named executor up to the limit goes through.",
+      "test": "test_ASwapFromANamedExecutor_UpToTheLimit_GoesThrough"
+    },
+    {
+      "statement": "A swap above the limit, from anyone else, or exact-output, is refused.",
+      "test": "test_RevertWhen_TheSwapIsAboveTheLimit_NotFromAnExecutor_OrExactOutput"
+    },
+    {
+      "statement": "The limit is per swap: the same executor may use it again.",
+      "test": "test_TheLimitIsPerSwap_TheSameExecutorMaySwapItAgain"
+    },
+    {
+      "statement": "A swap goes through exactly when it requests no more than the limit.",
+      "test": "testFuzz_ASwapGoesThrough_ExactlyWhenItRequestsNoMoreThanTheLimit"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "gate",
+      "executor",
+      "limit",
+      "beforeSwap"
+    ],
+    "integrations": []
+  }
+}
