@@ -29,9 +29,10 @@ dynamic_test_linking = false
 # which we do not.
 ffi = false
 
-# Tests may READ the hook manifests in context/ and nothing else, and may write nowhere.
-# test/ContextManifest.t.sol checks each manifest against the hook it describes.
-fs_permissions = [{ access = "read", path = "./context" }]
+# Tests may READ two places and may write nowhere:
+#   context/        the hook manifests (test/ContextManifest.t.sol checks each against its hook)
+#   test/fixtures/  CreateX's runtime code as it is on the testnets (test/SameAddress.t.sol)
+fs_permissions = [{ access = "read", path = "./context" }, { access = "read", path = "./test/fixtures" }]
 
 # Rehearsals against a live testnet's state: the official PositionManager, routers and the deployed
 # credential registry. Not part of `make gate`, which must pass with no network.
