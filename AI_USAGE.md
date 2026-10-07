@@ -1,39 +1,39 @@
 # AI_USAGE.md
 
-Disclosure of AI tooling used to build this repository. Granular by design: a blanket
-"AI was used" is not a disclosure, and in judged work it is treated as non-compliance.
+Disclosure of AI tooling used to build this repository.
 
-**Authorship is separate from tooling.** Every commit here is authored by the repository
-owner alone (see `CLAUDE.md`). This file records which tools assisted and exactly where.
-Both statements are true at once.
+**Authorship is separate from tooling.** Every commit here is authored by the repository owner
+alone (see `CLAUDE.md`). This file records which tools assisted and where. Both statements are
+true at once.
 
 ## Tools
 
 | Tool | Version / model | What it was used for |
 |---|---|---|
-| _e.g._ Claude Code | _model id_ | _the specific task_ |
+| Claude Code (Anthropic) | Claude models, October 2026 | Pair programming under the owner's direction: drafting Solidity, tests and scripts from the owner's specifications; reading pinned dependency source; running the gate; drafting documentation. |
 
 ## Files and directories each tool touched
 
 | Path | Tool | Nature of assistance |
 |---|---|---|
-| `src/` | | |
-| `test/` | | |
-| `docs/` | | |
-| `design/` | | |
+| `src/` | Claude Code | Drafted to the owner's design. |
+| `test/`, `test-fork/` | Claude Code | Drafted. The repository's rule: a check is made to fail once before it is trusted. |
+| `script/`, `context/` | Claude Code | Drafted: deploy scripts, the manifest and mask checkers. |
+| `README.md`, `docs/`, `FEEDBACK.md` | Claude Code | Drafted from results the owner reproduced. |
 
 ## Pre-existing work carried in
 
-List anything written before this project started, with the date it was written and where
-it lives in this repo. Disclosed prior work is permitted in most contexts; **undisclosed**
-prior work is the offence, and re-dating or quietly rewriting it to look fresh converts a
-disclosed advantage into misrepresentation.
-
 | Artifact | Written | Where it sits here | Disclosed as |
 |---|---|---|---|
-| | | `specs/` | |
+| The owner's repository template (gate, pins, manifest schema) | first commit here 2026-10-02 | `Makefile`, `install-deps.sh`, `context/` | the owner's own template |
+| Everything else | 2026-10-02 onwards | as committed; see `git log` | dated by its commits |
 
 ## What was NOT AI-assisted
 
-State this explicitly. An absence proves nothing; a stated negative proves the question
-was asked.
+- **Design.** What each hook does, who pays and who earns, every fee and share, and which
+  networks to use were decided by the owner.
+- **These functions were written by the owner by hand:** `ReverseV4Hook._bonus`,
+  `SwapperIdentity._swapperOf`, and the receipt id in `SwapReceiptTemplate`.
+- **Everything on chain.** Every transaction was reviewed, signed and sent by the owner from the
+  owner's keystore. No tool held a key or sent a transaction.
+- **Acceptance.** Nothing is committed unless `make gate` passes, and nothing is published without the owner's word.

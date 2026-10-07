@@ -186,6 +186,43 @@ change is routed to the *remove* callbacks would save the next reader a trip to 
 
 ---
 
+### 2026-10-07 — The 14 permission bits, the rule that pairs them and the routing consequence are in three places
+
+**Trying to:** answer, for any hook address, three questions at once: which callbacks fire, would
+the PoolManager accept it, and will Uniswap's interface route to it without an application.
+**Blocked by:** nothing reverts; the facts are simply apart. The bits are constants in
+`v4-core/src/libraries/Hooks.sol` (lines 27-47 at `d153b04`). The pairing rule (a returns-delta
+bit needs its callback's bit) is in `isValidHookAddress` in the same file (lines 109-127). The
+routing rule is on https://developers.uniswap.org/hook-allowlist, which names the two swap
+returns-delta flags and dynamic fees, and the dynamic fee is not one of the 14 bits at all but the
+pool key's `fee`. We did not find one page that puts the three together; we looked at those two
+sources on 2026-10-07 and did not re-read every concept page that day.
+**Cost:** not timed. The same question came up three times in one office-hours session.
+**Would have prevented it:** one table of the 14 bits with a "valid with" column and a "needs the
+allowlist" column, and a decoder that takes an address. Ours is `docs/hook-permissions.md` and
+`context/hookmask.py` (about 100 lines, standard library only); both are offered as a starting
+point. Worth stating on that page: of the 16,384 masks, 5,184 pass the pairing rule (our
+arithmetic from the rule).
+
+**Proof:** `python3 context/hookmask.py 0x0008` prints "beforeSwapReturnsDelta is set without
+beforeSwap" and exits 1; `make masks` checks 13 manifests, including a deployed address.
+
+### 2026-10-07 — Follow-up to the swap-guide entry: a guide snippet does not say which router version it was written for
+
+**Trying to:** judge, before running anything, whether a struct copied from a guide matches the
+router deployed on a given chain.
+**Blocked by:** the first entry above. The guide's `ExactInputSingleParams` has five fields and
+Universal Router 2.1.2 on Base Sepolia (`0x8702463e73f74d0b6765aBceb314Ef07aCb92650`) takes six,
+and reverts with empty data on five. Nothing on the snippet says which v4-periphery commit or
+router version it targets, so the mismatch is found only by a failed call.
+**Cost:** counted in the first entry; no extra time here.
+**Would have prevented it:** each guide snippet carries the v4-periphery commit or the Universal
+Router version it was written against, next to the code. Periphery changes faster than core, so
+this is where an integration written from a guide falls out of step first.
+
+**Proof:** `FOUNDRY_PROFILE=fork forge test --match-test
+test_UniversalRouter_2_1_2_RevertsWithNoReason_OnTheFiveFieldSwapLayout` (in `test-fork/`).
+
 ## Summary for the feedback form
 
 Filled in at submission, from the entries above, never from memory.

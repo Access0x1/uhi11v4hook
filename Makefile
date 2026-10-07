@@ -8,7 +8,7 @@
 #   make gate      pins, format check, clean build, tests (at least one must run), manifests:
 #                  what must pass before a commit
 
-.PHONY: install build test fmt context gate
+.PHONY: install build test fmt context gate masks mask
 
 install:
 	./install-deps.sh
@@ -22,9 +22,17 @@ test:
 fmt:
 	forge fmt
 
+# make masks: every hook's mask, decoded and checked. make mask X=0x25EC (or an address, or names).
+masks:
+	python3 context/hookmask.py --manifests
+
+mask:
+	python3 context/hookmask.py $(X)
+
 context:
 	python3 context/check_context.py
 	python3 context/check_routing.py
+	python3 context/hookmask.py --manifests
 
 # `forge test` exits 0 when it finds no tests ("No tests found in project!"), which a stale
 # cache can cause: seen 2026-10-01 after a static analyser's partial build. So the gate builds
@@ -39,3 +47,4 @@ gate:
 	fi
 	python3 context/check_context.py
 	python3 context/check_routing.py
+	python3 context/hookmask.py --manifests

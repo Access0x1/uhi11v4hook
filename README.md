@@ -140,6 +140,13 @@ the section above); its settings are not part of that address. Against a real te
 `--unlocked` and `--broadcast` for a dry run; the real run is the owner's, with the same signer
 on every chain. Mainnet is not in this repository's table.
 
+## The 14 permission switches
+
+A hook's permissions are the last 14 bits of its address. The table of all 14, the rule for which
+of the 16,384 masks are valid (5,184), and what a mask means for routing are in
+[`docs/hook-permissions.md`](docs/hook-permissions.md). To read any mask or address:
+`make mask X=0x25EC`. To list and check every hook here: `make masks`.
+
 ## Routing: which hooks Uniswap's interface reaches on its own
 
 Every hook and template in `src/` carries a `@custom:routing` line under its title. `make gate`
