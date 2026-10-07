@@ -1,0 +1,190 @@
+{
+  "schemaVersion": "0",
+  "name": "RealsleyHook",
+  "description": "A pool for checked accounts only. Only an account that holds this hook's credential in the registry named at deployment may swap on the pool or add liquidity to it; removing liquidity is never gated, so an account whose credential is withdrawn can always take its funds out. Meant for an asset only people who have passed a check may hold. It gates this pool, not the asset. It moves no funds and has no owner.",
+  "status": "tested",
+  "source": {
+    "path": "src/business/RealsleyHook.sol",
+    "contract": "RealsleyHook",
+    "gitBlob": "ce3bb9fff0a626a2dff0fa8b717e12d3d404c00b",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x880",
+    "callbacks": [
+      "beforeAddLiquidity",
+      "beforeSwap"
+    ],
+    "returnsDelta": false
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": false,
+      "afterInitialize": false,
+      "beforeAddLiquidity": true,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": true,
+      "afterSwap": false,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": false,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": false,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": true,
+      "swapAccess": "allowlist"
+    }
+  },
+  "routing": {
+    "autoRoutable": true,
+    "needsHookData": false,
+    "reasons": [
+      "No dynamic fee and no returns-delta flag, so a general router finds the pool.",
+      "But a swap is refused unless it comes through the router named at deployment from a credential holder, so a general router cannot trade on it.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any pool may name this hook.",
+    "fee": "Any. The hook does not read or set the fee.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "positionManager",
+      "type": "address",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeAddLiquidity"
+      ]
+    },
+    {
+      "name": "trustedRouter",
+      "type": "mapping(address => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap"
+      ]
+    },
+    {
+      "name": "registry, holderCredential",
+      "type": "ICredential, bytes32",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap",
+        "beforeAddLiquidity"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [],
+  "deltas": [
+    {
+      "callback": "beforeSwap",
+      "returns": "BeforeSwapDelta 0, fee override 0, or a revert",
+      "currency": "none",
+      "settledBy": "Nobody: no delta is returned."
+    }
+  ],
+  "externalCalls": [
+    {
+      "target": "the one router named at deployment",
+      "function": "msgSender()",
+      "why": "Only this address is asked who the swapper is. In try/catch: a router that reverts means nobody is recognised."
+    },
+    {
+      "target": "the PositionManager named at deployment",
+      "function": "ownerOf(uint256)",
+      "why": "Names the holder of the position liquidity is added to. Not wrapped: if it reverts, the deposit reverts."
+    },
+    {
+      "target": "the registry named at deployment",
+      "function": "hasValidCredential(address,bytes32)",
+      "why": "Asks whether the account has passed the check. Not wrapped: for a gate, a check that cannot be made is a refusal."
+    }
+  ],
+  "accessControl": [
+    {
+      "function": "the hook callbacks",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes the router named at deployment answers `msgSender()` with the account that called it. A router that lies makes every statement here about 'the swapper' false.",
+    "Assumes the PositionManager named at deployment is the official one: it sets a position's salt to its token id and its `ownerOf` names the holder.",
+    "Assumes the registry named at deployment tells the truth and stays available. Whoever controls it controls what this hook decides."
+  ],
+  "doesNotGuarantee": [
+    "Does not gate removing liquidity or donating: funds can always be taken out.",
+    "Does not know whose money a swap spends: it knows who called the router named at deployment and who holds a position.",
+    "Does not let anyone swap through any other router: such a swapper cannot be established and is refused.",
+    "Does not stop a position's NFT being transferred to someone not allowed, who then holds it and earns its fees but cannot add to it.",
+    "Does not gate the asset itself: the token can still be transferred or traded anywhere else.",
+    "Does not let anyone swap while the registry is unavailable."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: beforeAddLiquidity and beforeSwap, mask 0x880.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address with one bit different.",
+      "test": "test_RevertWhen_PlacedAtAddressWithTheWrongFlag"
+    },
+    {
+      "statement": "A checked account swaps and anyone else is refused.",
+      "test": "test_ACheckedAccountSwaps_AndAnyoneElseIsRefused"
+    },
+    {
+      "statement": "A credential withdrawn stops the next swap and deposit, but never the way out.",
+      "test": "test_ACredentialWithdrawn_StopsTheNextSwap_ButNeverTheWayOut"
+    },
+    {
+      "statement": "A registry that reverts refuses every swap.",
+      "test": "test_ARegistryThatReverts_RefusesEverySwap"
+    },
+    {
+      "statement": "Nobody can open a position for an unchecked account.",
+      "test": "test_NobodyCanOpenAPositionForAnUncheckedAccount"
+    },
+    {
+      "statement": "Swapping follows the registry.",
+      "test": "testFuzz_SwappingFollowsTheRegistry"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "gate",
+      "credential",
+      "compliance",
+      "beforeSwap",
+      "beforeAddLiquidity"
+    ],
+    "integrations": []
+  }
+}
