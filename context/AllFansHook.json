@@ -1,0 +1,190 @@
+{
+  "schemaVersion": "0",
+  "name": "AllFansHook",
+  "description": "A fee on every swap, split 80/20. The hook takes its fee from each swap's input, on top of the pool's own LP fee. Of everything taken, 80% is the creator's to withdraw and 20% the treasury's. Both addresses are fixed at deployment and each can only ever be paid its own share, whoever asks for the payment. The fees wait in the hook as claims on the PoolManager until they are paid out.",
+  "status": "tested",
+  "source": {
+    "path": "src/business/AllFansHook.sol",
+    "contract": "AllFansHook",
+    "gitBlob": "52f4f6b177c5178cf52f66f4ff8c312adb334cd8",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0xCC",
+    "callbacks": [
+      "beforeSwap",
+      "afterSwap"
+    ],
+    "returnsDelta": true
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": false,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": true,
+      "afterSwap": true,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": true,
+      "afterSwapReturnsDelta": true,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": false,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": false,
+      "swapAccess": "none"
+    }
+  },
+  "routing": {
+    "autoRoutable": false,
+    "needsHookData": false,
+    "reasons": [
+      "It returns a delta from both swap callbacks: Uniswap's interface routes to it only after Uniswap Labs allowlists its address.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any pool may name this hook; each PoolId and currency has its own books.",
+    "fee": "Any static fee. The hook's fee is on top of it.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "pot, feesTaken, swept, paidToCreator",
+      "type": "mapping(PoolId => mapping(Currency => uint256))",
+      "kind": "storage",
+      "writtenBy": [
+        "beforeSwap",
+        "afterSwap",
+        "sweep",
+        "payCreator"
+      ],
+      "readBy": [
+        "anyone, through the public getters"
+      ]
+    },
+    {
+      "name": "hookFee, treasury, treasuryShare, creator",
+      "type": "uint24, address, uint24, address",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "beforeSwap",
+        "afterSwap",
+        "sweep",
+        "payCreator"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [
+    {
+      "expression": "fee = input * hookFee / 1e6; creator's share = feesTaken * 800000 / 1e6; treasury's share = feesTaken * 200000 / 1e6",
+      "format": "pips, 1e6 = 100%",
+      "rounding": "each down; at most one unit per pool and currency is never paid out"
+    }
+  ],
+  "deltas": [
+    {
+      "callback": "beforeSwap",
+      "returns": "the fee as a specified-currency delta, for an exact-input swap",
+      "currency": "the swap's input",
+      "settledBy": "The hook mints itself that amount of ERC-6909 claims on the PoolManager in the same callback."
+    },
+    {
+      "callback": "afterSwap",
+      "returns": "the fee as an unspecified-currency delta, for an exact-output swap",
+      "currency": "the swap's input",
+      "settledBy": "The hook mints itself that amount of ERC-6909 claims on the PoolManager in the same callback."
+    }
+  ],
+  "externalCalls": [
+    {
+      "target": "the PoolManager",
+      "function": "unlock, burn, take",
+      "why": "A payout burns the hook's claims and has the PoolManager send the currency to the treasury or the creator."
+    }
+  ],
+  "accessControl": [
+    {
+      "function": "the hook callbacks",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    },
+    {
+      "function": "sweep, payCreator",
+      "caller": "anyone",
+      "enforcedBy": "The recipient and the amount are fixed by the books: a caller chooses neither."
+    },
+    {
+      "function": "unlockCallback",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes the treasury and the creator can receive the currencies of the pools that name this hook: one that cannot receive fails only its own payout."
+  ],
+  "doesNotGuarantee": [
+    "Does not let the split, the fee, the creator or the treasury be changed.",
+    "Does not pay anyone during a swap: fees wait in the hook until someone asks for a payout.",
+    "Does not pay out the last unit that both shares rounded away.",
+    "Does not restrict which pools use it, and every such pool pays these two addresses."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: beforeSwap and afterSwap, both with returns-delta, mask 0xCC.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address with one bit different.",
+      "test": "test_RevertWhen_PlacedAtAddressWithTheWrongFlag"
+    },
+    {
+      "statement": "Of every fee taken the creator gets 80% and the treasury 20%.",
+      "test": "test_OfEveryFeeTaken_TheCreatorGetsEightyPercent_AndTheTreasuryTwenty"
+    },
+    {
+      "statement": "Anyone can ask for the creator's payout; it goes only to the creator and only once.",
+      "test": "test_AStrangerCanPayTheCreator_ButOnlyTheCreator_AndOnlyOnce"
+    },
+    {
+      "statement": "The order of the two payouts changes neither share.",
+      "test": "test_TheOrderOfPaymentDoesNotChangeEitherShare"
+    },
+    {
+      "statement": "Each currency has its own books.",
+      "test": "test_AFeeIsTakenInWhicheverCurrencyGoesIn_AndEachIsItsOwnBook"
+    },
+    {
+      "statement": "Over any swaps and payouts the two shares never exceed what was taken, and at most one unit stays behind.",
+      "test": "testFuzz_TheTwoSharesNeverExceedWhatWasTaken"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "hook-fee",
+      "revenue-split",
+      "returns-delta",
+      "creators"
+    ],
+    "integrations": []
+  }
+}
