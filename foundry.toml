@@ -49,3 +49,12 @@ int_types       = "long"
 # Fuzzing a v4 swap is nearly free on this stack, so the count is high. Lowering it needs a reason.
 [fuzz]
 runs = 10000
+
+# Names for --rpc-url, as Foundry's scripting guide recommends: `--rpc-url base-sepolia`.
+# Keyless public endpoints only. A keyed endpoint is given on the command line or in the shell,
+# never written here.
+[rpc_endpoints]
+sepolia          = "https://ethereum-sepolia-rpc.publicnode.com"
+base-sepolia     = "https://sepolia.base.org"
+unichain-sepolia = "https://sepolia.unichain.org"
+
