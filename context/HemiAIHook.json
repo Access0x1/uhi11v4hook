@@ -1,0 +1,174 @@
+{
+  "schemaVersion": "0",
+  "name": "HemiAIHook",
+  "description": "Receipts inside a window of time. A swap that carries a payee and an order reference as hookData leaves one Receipt event with the amounts the swap actually moved, when its block's time is inside the window fixed at deployment. Before and after the window the swap goes through and leaves no receipt. It never reverts a swap, moves no funds, returns no delta and has no owner.",
+  "status": "tested",
+  "source": {
+    "path": "src/business/HemiAIHook.sol",
+    "contract": "HemiAIHook",
+    "gitBlob": "d8019313c511280b265203716d5245c49c086dca",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x40",
+    "callbacks": [
+      "afterSwap"
+    ],
+    "returnsDelta": false
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": false,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": false,
+      "afterSwap": true,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": false,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": false,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": true,
+      "swapAccess": "none"
+    }
+  },
+  "routing": {
+    "autoRoutable": true,
+    "needsHookData": false,
+    "reasons": [
+      "No dynamic fee and no returns-delta flag.",
+      "A swap with empty hookData goes through and leaves no receipt; a receipt needs a caller that sends the hookData.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any pool may name this hook; each PoolId has its own receipts.",
+    "fee": "Any. The hook does not read or set the fee.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "receipted",
+      "type": "mapping(bytes32 => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "afterSwap"
+      ],
+      "readBy": [
+        "anyone, through the public getter"
+      ]
+    },
+    {
+      "name": "trustedRouter",
+      "type": "mapping(address => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "afterSwap"
+      ]
+    },
+    {
+      "name": "opensAt, closesAt",
+      "type": "uint64, uint64",
+      "kind": "immutable",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "afterSwap",
+        "isOpen"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [
+    {
+      "expression": "open when opensAt <= block.timestamp < closesAt",
+      "format": "unix seconds",
+      "rounding": "none"
+    }
+  ],
+  "deltas": [
+    {
+      "callback": "afterSwap",
+      "returns": "int128 0",
+      "currency": "unspecified currency of the swap",
+      "settledBy": "Nobody. Without the afterSwapReturnDelta bit the PoolManager does not read the value."
+    }
+  ],
+  "externalCalls": [
+    {
+      "target": "the one router named at deployment",
+      "function": "msgSender()",
+      "why": "Only this address is asked who the swapper is. In try/catch: a router that reverts means nobody is recognised."
+    }
+  ],
+  "accessControl": [
+    {
+      "function": "the hook callbacks",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes the router named at deployment answers `msgSender()` with the account that called it. A router that lies makes every statement here about 'the swapper' false.",
+    "Assumes a block's timestamp is right to within the few seconds its proposer may choose."
+  ],
+  "doesNotGuarantee": [
+    "Does not say where a swap's output went: that is the router's choice, and a hook with this mask cannot see or control it.",
+    "Does not write a receipt for a swap routed without hookData, which is every swap from a general interface.",
+    "Does not establish the payer for a swap that did not come through the router named at deployment: the payer on such a receipt is empty.",
+    "Does not restrict which pools use it. Anyone can initialise a pool that names this hook.",
+    "Does not prove more about time than a block's timestamp does."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: afterSwap, mask 0x40.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address with one bit different.",
+      "test": "test_RevertWhen_PlacedAtAddressWithTheWrongFlag"
+    },
+    {
+      "statement": "A receipt is written from the window's first second to its last, and at no other time; the swap goes through either way.",
+      "test": "test_AReceiptIsWritten_FromTheFirstSecondOfTheWindow_ToItsLast_AndAtNoOtherTime"
+    },
+    {
+      "statement": "A window that never opens cannot be deployed.",
+      "test": "test_RevertWhen_TheWindowIsEmpty"
+    },
+    {
+      "statement": "At any time, with any hookData, the swap goes through, and no receipt is written outside the window.",
+      "test": "testFuzz_AtAnyTime_WithAnyHookData_TheSwapGoesThrough"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "receipt",
+      "afterSwap",
+      "time-window",
+      "events"
+    ],
+    "integrations": []
+  }
+}
