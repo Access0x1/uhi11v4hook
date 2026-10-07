@@ -1,0 +1,154 @@
+{
+  "schemaVersion": "0",
+  "name": "Access0x1Hook",
+  "description": "Open receipts for swaps. A swap that carries a payee and an order reference as hookData leaves one Receipt event with the amounts the swap actually moved, for any payee but the empty one. It never reverts a swap, moves no funds, returns no delta, and has no owner and no list of payees.",
+  "status": "tested",
+  "source": {
+    "path": "src/business/Access0x1Hook.sol",
+    "contract": "Access0x1Hook",
+    "gitBlob": "903aec16d1f6a69f610abfdb370060283ed8a7c3",
+    "inherits": "OpenZeppelin uniswap-hooks BaseHook at bd5287c4a9f5c22c2393f7587a9b357662916115"
+  },
+  "compiler": {
+    "solc": "0.8.30",
+    "evmVersion": "cancun",
+    "viaIR": false,
+    "optimizer": false
+  },
+  "permissions": {
+    "mask": "0x40",
+    "callbacks": [
+      "afterSwap"
+    ],
+    "returnsDelta": false
+  },
+  "hooklist": {
+    "flags": {
+      "beforeInitialize": false,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": false,
+      "afterSwap": true,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnsDelta": false,
+      "afterSwapReturnsDelta": false,
+      "afterAddLiquidityReturnsDelta": false,
+      "afterRemoveLiquidityReturnsDelta": false
+    },
+    "properties": {
+      "dynamicFee": false,
+      "upgradeable": false,
+      "requiresCustomSwapData": false,
+      "vanillaSwap": true,
+      "swapAccess": "none"
+    }
+  },
+  "routing": {
+    "autoRoutable": true,
+    "needsHookData": false,
+    "reasons": [
+      "No dynamic fee and no returns-delta flag.",
+      "A swap with empty hookData goes through and leaves no receipt; a receipt needs a caller that sends the hookData.",
+      "The 0x91 address-prefix rule applies to a deployed address. This hook is not deployed."
+    ]
+  },
+  "pool": {
+    "binding": "None. Any pool may name this hook; each PoolId has its own receipts.",
+    "fee": "Any. The hook does not read or set the fee.",
+    "currencies": "Any, including native."
+  },
+  "state": [
+    {
+      "name": "receipted",
+      "type": "mapping(bytes32 => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "afterSwap"
+      ],
+      "readBy": [
+        "anyone, through the public getter"
+      ]
+    },
+    {
+      "name": "trustedRouter",
+      "type": "mapping(address => bool)",
+      "kind": "storage",
+      "writtenBy": [
+        "constructor"
+      ],
+      "readBy": [
+        "afterSwap"
+      ]
+    }
+  ],
+  "transientStorage": [],
+  "math": [],
+  "deltas": [
+    {
+      "callback": "afterSwap",
+      "returns": "int128 0",
+      "currency": "unspecified currency of the swap",
+      "settledBy": "Nobody. Without the afterSwapReturnDelta bit the PoolManager does not read the value."
+    }
+  ],
+  "externalCalls": [
+    {
+      "target": "the one router named at deployment",
+      "function": "msgSender()",
+      "why": "Only this address is asked who the swapper is. In try/catch: a router that reverts means nobody is recognised."
+    }
+  ],
+  "accessControl": [
+    {
+      "function": "the hook callbacks",
+      "caller": "PoolManager only",
+      "enforcedBy": "onlyPoolManager in BaseHook; reverts NotPoolManager"
+    }
+  ],
+  "securityAssumptions": [
+    "Assumes the v4 `PoolManager` is the only caller of the callbacks (enforced by the `onlyPoolManager` modifier inherited from `BaseHook`).",
+    "Assumes the router named at deployment answers `msgSender()` with the account that called it. A router that lies makes every statement here about 'the swapper' false."
+  ],
+  "doesNotGuarantee": [
+    "Does not say where a swap's output went: that is the router's choice, and a hook with this mask cannot see or control it.",
+    "Does not write a receipt for a swap routed without hookData, which is every swap from a general interface.",
+    "Does not establish the payer for a swap that did not come through the router named at deployment: the payer on such a receipt is empty.",
+    "Does not restrict which pools use it. Anyone can initialise a pool that names this hook.",
+    "Does not say that a payee id means anything: any 32 bytes but zero are accepted."
+  ],
+  "invariants": [
+    {
+      "statement": "The hook's address carries exactly the permissions it declares: afterSwap, mask 0x40.",
+      "test": "test_Address_MatchesDeclaredPermissions"
+    },
+    {
+      "statement": "The constructor rejects an address with one bit different.",
+      "test": "test_RevertWhen_PlacedAtAddressWithTheWrongFlag"
+    },
+    {
+      "statement": "A swap naming a payee leaves exactly one receipt, recorded under the swapper the router reported.",
+      "test": "test_ASwapNamingAnyPayee_LeavesOneReceipt_UnderTheSwapper"
+    },
+    {
+      "statement": "A swap with no hookData writes nothing, and an empty payee is refused a receipt while the swap goes through.",
+      "test": "test_NoHookData_IsAnOrdinarySwap_AndAnEmptyPayeeGetsNoReceipt"
+    },
+    {
+      "statement": "Whatever bytes are sent as hookData, the swap goes through.",
+      "test": "testFuzz_AnyHookData_NeverStopsTheSwap"
+    }
+  ],
+  "deployments": [],
+  "directory": {
+    "tags": [
+      "receipt",
+      "afterSwap",
+      "payments"
+    ],
+    "integrations": []
+  }
+}
