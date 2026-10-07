@@ -6,7 +6,14 @@ import {Counter} from "../src/Counter.sol";
 import {ReverseV4Hook} from "../src/ReverseV4Hook.sol";
 import {ICredential} from "../src/interfaces/ICredential.sol";
 
+import {DeployBusinessHook} from "../script/DeployBusinessHook.s.sol";
+
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+
+/// @dev What every hook built on BaseHook answers.
+interface IPermissions {
+    function getHookPermissions() external pure returns (Hooks.Permissions memory);
+}
 
 /// @notice The manifests in context/ are what another AI reads instead of the code. This suite
 ///         fails when a manifest says something about a hook's permissions that the hook does not.
@@ -47,6 +54,49 @@ contract ContextManifestTest is HookTestBase {
         _place(abi.encodePacked(type(ReverseV4Hook).creationCode, abi.encode(manager, config)), where);
 
         _assertManifestMatches("context/ReverseV4Hook.json", ReverseV4Hook(where).getHookPermissions());
+    }
+
+    /// @dev The eleven hooks of src/business/, each placed at an address with its own bits and
+    ///      compared with its manifest. Their constructors only ask that some addresses are
+    ///      contracts; the PoolManager stands in for each, since getHookPermissions() reads none.
+    function test_BusinessHooks_ManifestsMatchHooks() public {
+        DeployBusinessHook script = new DeployBusinessHook();
+        address stand = address(manager);
+        address[] memory routers = new address[](1);
+        routers[0] = stand;
+        string[11] memory names = [
+            "Access0x1Hook",
+            "ClickReservHook",
+            "HemiAIHook",
+            "ColmadoHook",
+            "QuantLHook",
+            "RebatoHook",
+            "NFTeriaHook",
+            "RealsleyHook",
+            "GitHatHook",
+            "SebasTNHook",
+            "AllFansHook"
+        ];
+        bytes[11] memory args = [
+            abi.encode(manager, routers),
+            abi.encode(manager, routers, stand, bytes32(0)),
+            abi.encode(manager, routers, uint64(1), uint64(2)),
+            abi.encode(manager, uint24(3000), routers, stand, bytes32(0), uint24(500)),
+            abi.encode(manager, uint24(500), routers, uint24(10_000)),
+            abi.encode(manager, uint24(3000), routers, uint24(100), uint64(1), uint64(2)),
+            abi.encode(manager, routers, stand, stand),
+            abi.encode(manager, routers, stand, stand, bytes32(0)),
+            abi.encode(manager, routers, uint256(1)),
+            abi.encode(manager, stand),
+            abi.encode(manager, uint24(10_000), stand, stand)
+        ];
+        for (uint256 i = 0; i < names.length; i++) {
+            address where = address(uint160(_flagAddress(script.flagsOf(names[i]))) | (uint160(i + 1) << 20));
+            _place(abi.encodePacked(script.codeOf(names[i]), args[i]), where);
+            _assertManifestMatches(
+                string.concat("context/", names[i], ".json"), IPermissions(where).getHookPermissions()
+            );
+        }
     }
 
     function _assertManifestMatches(string memory path, Hooks.Permissions memory p) internal view {
