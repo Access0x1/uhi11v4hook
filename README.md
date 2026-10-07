@@ -21,6 +21,7 @@ make gate           # pins, fmt, clean build, tests (at least one must run), man
 | **CREATE2 deployer called directly** with `salt ++ initcode` | `script/DeployHook.s.sol` | `new Hook{salt}` sent as a plain CREATE (seen with forge 1.8.3 on Base Sepolia): the hook lands at an unmined address and its constructor reverts. |
 | **The miner skips `0x91…` addresses** and addresses that already hold code | `script/DeployHook.s.sol` `mine()` | Uniswap's router does not route on its own to a hook whose address starts `0x91`. |
 | **Testnets only, by table** (Sepolia, Base Sepolia, Unichain Sepolia) | `poolManagerFor()`, `script/handoff/run.sh` | No flag reaches mainnet. Any other chain id reverts before anything is sent. |
+| **One address on every testnet** (CREATE3 through CreateX, the salt tied to its sender, no chain id in it) | `script/SameAddress.s.sol`, `test/SameAddress.t.sol` | A hook with a different address on every chain, because a CREATE2 address hashes the PoolManager's address. And a stranger occupying the address on a chain not yet deployed to. |
 | **Guarded hand-off**: dry run by default; `LIVE=1` needs a TTY and the typed word `SEND` | `script/handoff/run.sh` | Broadcasting by accident, signing from `.env`, or deploying twice. Keys stay in `cast wallet`. |
 | **`vm.chainId` set in `setUp()`** | `HookTestBase._deployV4` | A test that passes on 31337 and fails on the chain it deploys to. |
 | **Manifest beside each hook, tested like code** | `context/*.json`, `test/ContextManifest.t.sol`, `context/check_context.py` | An AI reviewer (or a judge) reading a description that no longer matches the code. A changed source hash, mask or test name fails the gate. |
@@ -63,6 +64,37 @@ Taken from theirs unchanged: the folder layout, `BaseHook`, the example hook's c
    run `make gate`.
 6. Deploy: `ACCOUNT=<keystore> SENDER=<address> bash script/handoff/run.sh deploy sepolia` (dry
    run), then the same with `LIVE=1`.
+
+## The same address on every testnet
+
+`script/DeployHook.s.sol` mines a CREATE2 address, which is a hash of the hook's code and of its
+constructor arguments. The first argument is always the chain's PoolManager, so the hook gets a
+different address on each chain. `script/SameAddress.s.sol` deploys through
+[CreateX](https://github.com/pcaversaccio/createx) with CREATE3 instead: the address is a hash of
+the account that sends the deployment and of a salt, and of nothing else.
+
+```bash
+forge script script/SameAddress.s.sol:DeployHookSameAddress --rpc-url <testnet rpc> --sender <signer>
+```
+
+That is a dry run: it signs nothing and sends nothing, and prints the address. Rehearsed this way
+on 2026-10-07 with one placeholder sender, Counter lands on one address on Sepolia, Base Sepolia
+and Unichain Sepolia. `DeployReverseV4HookSameAddress` does the same for ReverseV4Hook, whatever
+each chain's registry, PositionManager, router and treasury are, and keeps every check of
+`DeployReverseV4Hook` before and after.
+
+What to know before relying on it:
+
+- Use the same signer on every chain. The address belongs to that account; another sender gets
+  another address, and nobody else can take yours on a chain you have not reached.
+- The address proves who deployed, not what was deployed: the code and the settings are not in
+  it. Both scripts read the hook back from the chain and refuse to finish if it differs.
+- A second run on one chain is refused. A new version of a hook needs a new name in the script,
+  which gives it a new address on every chain.
+- CreateX must be on the chain with the code hash the script pins. Its runtime code in
+  `test/fixtures/createx.hex` was read from Sepolia with `cast code` and is CreateX's, not ours.
+- Nothing has been deployed this way yet. The two hooks on Base Sepolia were deployed with the
+  CREATE2 scripts and stay at their addresses.
 
 ## Routing: which hooks Uniswap's interface reaches on its own
 
