@@ -96,6 +96,42 @@ What to know before relying on it:
 - Nothing has been deployed this way yet. The two hooks on Base Sepolia were deployed with the
   CREATE2 scripts and stay at their addresses.
 
+## A hook for each business
+
+`src/business/` holds eleven hooks, one per business: ClickReserv, Colmado, Access0x1, SebasTN,
+GitHat, QuantL, NFTeria, AllFans, Rebato, HemiAI and Realsley. Each is its own contract, so each
+has its own address and its own pools.
+
+Today all eleven are the same thing under their own names, `BusinessReceiptHook`: a pool whose
+swaps can leave a receipt. A swap that carries `abi.encode(bytes32 payee, bytes32 orderRef)` as
+hookData gets one `Receipt` event with what the swap actually moved. That is all. The hook never
+reverts a swap, moves no funds, returns no delta, changes no price or fee, and has no owner. It
+is the least a hook can do and still be worth deploying, on purpose: what is one business's alone
+is added to that business's file later, with its own tests.
+
+- **No allowlist needed.** One flag, afterSwap, with no returns-delta and no dynamic fee:
+  Uniswap's interface routes to these on its own (see Routing, below). A swap routed that way
+  carries no hookData, so it goes through and leaves no receipt; a receipt needs a caller that
+  sends the hookData. The day a business hook takes a fee or sets one, it will need the allowlist.
+- **A receipt says who the swap NAMED.** It does not say where the swap's output went, and the
+  hook keeps no list of payees: which payee ids mean something is the business's own app's to say.
+
+Deploy one, on a local fork first:
+
+```bash
+anvil --fork-url https://sepolia.base.org
+```
+
+```bash
+BUSINESS=ClickReserv forge script script/DeployBusinessHook.s.sol:DeployBusinessHook --rpc-url http://127.0.0.1:8545 --unlocked --sender 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 --broadcast
+```
+
+That sender is anvil's own first test account; the transaction goes to the fork and nowhere else.
+Done this way on 2026-10-07 for ClickReserv and Colmado: each landed on the address the script
+named, answered with its own name, and the real Base Sepolia had no code there afterwards.
+Against a real testnet, leave out `--unlocked` and `--broadcast` for a dry run; the real run is
+the owner's, with the same signer on every chain. Mainnet is not in this repository's table.
+
 ## Routing: which hooks Uniswap's interface reaches on its own
 
 Every hook and template in `src/` carries a `@custom:routing` line under its title. `make gate`
