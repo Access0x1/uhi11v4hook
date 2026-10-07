@@ -96,25 +96,30 @@ What to know before relying on it:
 - Nothing has been deployed this way yet. The two hooks on Base Sepolia were deployed with the
   CREATE2 scripts and stay at their addresses.
 
-## A hook for each business
+## Eleven hooks built from the templates
 
-`src/business/` holds eleven hooks, one per business: ClickReserv, Colmado, Access0x1, SebasTN,
-GitHat, QuantL, NFTeria, AllFans, Rebato, HemiAI and Realsley. Each is its own contract, so each
-has its own address and its own pools.
+`src/business/` holds eleven finished hooks. Each is one of the templates above with its one
+rule written, its own tests in `test/business/`, and its own manifest in `context/`. Use one as
+it is, or read it as the shortest example of building on its template.
 
-Today all eleven are the same thing under their own names, `BusinessReceiptHook`: a pool whose
-swaps can leave a receipt. A swap that carries `abi.encode(bytes32 payee, bytes32 orderRef)` as
-hookData gets one `Receipt` event with what the swap actually moved. That is all. The hook never
-reverts a swap, moves no funds, returns no delta, changes no price or fee, and has no owner. It
-is the least a hook can do and still be worth deploying, on purpose: what is one business's alone
-is added to that business's file later, with its own tests.
+| Hook | What a pool on it does | Built on | Mask | Routed by Uniswap's interface |
+|---|---|---|---|---|
+| `Access0x1Hook` | A swap that names a payee and an order reference leaves one receipt, for any payee | SwapReceiptTemplate | `0x40` | on its own |
+| `ClickReservHook` | The same receipt, only for a payee registered in a credential registry | SwapReceiptTemplate | `0x40` | on its own |
+| `HemiAIHook` | The same receipt, only inside a window of time fixed at deployment | SwapReceiptTemplate | `0x40` | on its own |
+| `ColmadoHook` | A lower LP fee for swappers who hold a credential | OverrideFeeTemplate | `0x2080` | after the allowlist |
+| `QuantLHook` | One LP fee on weekdays and another at the weekend (UTC) | OverrideFeeTemplate | `0x2080` | after the allowlist |
+| `RebatoHook` | A lower LP fee for everyone during a promotion's window | OverrideFeeTemplate | `0x2080` | after the allowlist |
+| `NFTeriaHook` | Only holders of one NFT collection may swap or add liquidity | HolderOnlyPoolTemplate | `0x880` | found, but only holders can trade |
+| `RealsleyHook` | Only accounts holding a credential may swap or add liquidity | HolderOnlyPoolTemplate | `0x880` | found, but only holders can trade |
+| `GitHatHook` | Only named programs may swap, each swap up to a fixed size | GatedSwapTemplate | `0x80` | found, but only executors can trade |
+| `SebasTNHook` | Keeps a running total of the LP fees each position holder has collected | FeesCollectedTemplate | `0x500` | on its own |
+| `AllFansHook` | Takes a fee on every swap: 80% to a creator, 20% to a treasury | HookFeePotTemplate | `0xCC` | after the allowlist |
 
-- **No allowlist needed.** One flag, afterSwap, with no returns-delta and no dynamic fee:
-  Uniswap's interface routes to these on its own (see Routing, below). A swap routed that way
-  carries no hookData, so it goes through and leaves no receipt; a receipt needs a caller that
-  sends the hookData. The day a business hook takes a fee or sets one, it will need the allowlist.
-- **A receipt says who the swap NAMED.** It does not say where the swap's output went, and the
-  hook keeps no list of payees: which payee ids mean something is the business's own app's to say.
+What they have in common: no owner, no upgrade path, every setting fixed at deployment. Only
+`AllFansHook` holds funds (the fees it took, until they are paid out). The three receipt hooks and
+the three fee hooks never revert a swap; the three gates revert on purpose and never gate the way
+out. Each manifest says what its hook does not guarantee, and that list matters most.
 
 Deploy one, on a local fork first:
 
@@ -123,14 +128,17 @@ anvil --fork-url https://sepolia.base.org
 ```
 
 ```bash
-BUSINESS=ClickReserv forge script script/DeployBusinessHook.s.sol:DeployBusinessHook --rpc-url http://127.0.0.1:8545 --unlocked --sender 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 --broadcast
+HOOK=QuantLHook BASE_FEE=500 WEEKEND_FEE=10000 forge script script/DeployBusinessHook.s.sol:DeployBusinessHook --rpc-url http://127.0.0.1:8545 --unlocked --sender 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 --broadcast
 ```
 
 That sender is anvil's own first test account; the transaction goes to the fork and nowhere else.
-Done this way on 2026-10-07 for ClickReserv and Colmado: each landed on the address the script
-named, answered with its own name, and the real Base Sepolia had no code there afterwards.
-Against a real testnet, leave out `--unlocked` and `--broadcast` for a dry run; the real run is
-the owner's, with the same signer on every chain. Mainnet is not in this repository's table.
+`script/DeployBusinessHook.s.sol` lists the settings each hook reads from the environment. Done
+this way on 2026-10-07 for `QuantLHook`, `Access0x1Hook` and `AllFansHook`: each landed on the
+address the script named, `QuantLHook` answered with the fees it was given, and the real Base
+Sepolia had no code there afterwards. Each hook lands on the same address on every testnet (see
+the section above); its settings are not part of that address. Against a real testnet, leave out
+`--unlocked` and `--broadcast` for a dry run; the real run is the owner's, with the same signer
+on every chain. Mainnet is not in this repository's table.
 
 ## Routing: which hooks Uniswap's interface reaches on its own
 
